@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+chromadb/
+.env
+*.egg-info/
+.idea/
+.vscode/
+ai_agent.py

@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent 聊天</title>
+    <style>
+        /* ==================== 全局重置 ==================== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #0f0f1a;
+            color: #e0e0e0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ==================== 顶部栏 ==================== */
+        .header {
+            background: linear-gradient(135deg, #1a1a2e, #16213e);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid #2a2a4a;
+            flex-shrink: 0;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header .logo {
+            font-size: 22px;
+            font-weight: 700;
+            background: linear-gradient(90deg, #00d2ff, #3a7bd5);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #4ade80;
+            display: inline-block;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .header .status-text {
+            font-size: 13px;
+            color: #888;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-right label {
+            font-size: 13px;
+            color: #888;
+        }
+
+        .header-right input {
+            background: #1e1e3a;
+            border: 1px solid #3a3a5a;
+            border-radius: 8px;
+            padding: 6px 12px;
+            color: #e0e0e0;
+            font-size: 13px;
+            outline: none;
+            transition: border 0.2s;
+        }
+
+        .header-right input:focus {
+            border-color: #3a7bd5;
+        }
+
+        /* ==================== 聊天主体 ==================== */
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            scroll-behavior: smooth;
+        }
+
+        .chat-container::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .chat-container::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .chat-container::-webkit-scrollbar-thumb {
+            background: #3a3a5a;
+            border-radius: 3px;
+        }
+
+        /* ==================== 消息气泡 ==================== */
+        .message {
+            max-width: 75%;
+            padding: 12px 16px;
+            border-radius: 16px;
+            line-height: 1.6;
+            font-size: 14px;
+            animation: fadeIn 0.3s ease;
+            word-break: break-word;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background: linear-gradient(135deg, #3a7bd5, #00d2ff);
+            color: #fff;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.assistant {
+            align-self: flex-start;
+            background: #1e1e3a;
+            border: 1px solid #2a2a4a;
+            border-bottom-left-radius: 4px;
+        }
+
+        .message .msg-label {
+            font-size: 11px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            opacity: 0.7;
+        }
+
+        .message .msg-time {
+            font-size: 11px;
+            opacity: 0.4;
+            margin-top: 4px;
+            text-align: right;
+        }
+
+        .message.assistant .msg-label {
+            color: #00d2ff;
+        }
+        .message.user .msg-label {
+            color: rgba(255,255,255,0.8);
+        }
+
+        /* ==================== 正在输入指示器 ==================== */
+        .typing-indicator {
+            align-self: flex-start;
+            background: #1e1e3a;
+            border: 1px solid #2a2a4a;
+            border-radius: 16px;
+            border-bottom-left-radius: 4px;
+            padding: 12px 20px;
+            display: none;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .typing-indicator span {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #3a7bd5;
+            animation: typing 1.4s infinite ease-in-out;
+        }
+
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+
+        .typing-indicator.show {
+            display: flex;
+        }
+
+        /* ==================== 输入区 ==================== */
+        .input-area {
+            flex-shrink: 0;
+            padding: 16px 24px;
+            background: #1a1a2e;
+            border-top: 1px solid #2a2a4a;
+            display: flex;
+            gap: 12px;
+        }
+
+        .input-area input {
+            flex: 1;
+            background: #1e1e3a;
+            border: 1px solid #3a3a5a;
+            border-radius: 12px;
+            padding: 12px 16px;
+            color: #e0e0e0;
+            font-size: 14px;
+            outline: none;
+            transition: border 0.2s;
+        }
+
+        .input-area input:focus {
+            border-color: #3a7bd5;
+        }
+
+        .input-area input::placeholder {
+            color: #666;
+        }
+
+        .input-area button {
+            background: linear-gradient(135deg, #3a7bd5, #00d2ff);
+            border: none;
+            border-radius: 12px;
+            padding: 12px 24px;
+            color: #fff;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            white-space: nowrap;
+        }
+
+        .input-area button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 20px rgba(58, 123, 213, 0.4);
+        }
+
+        .input-area button:active {
+            transform: translateY(0);
+        }
+
+        .input-area button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* ==================== 错误提示 ==================== */
+        .message.error {
+            align-self: center;
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #f87171;
+            border-radius: 8px;
+            font-size: 13px;
+            max-width: 90%;
+            text-align: center;
+        }
+
+        /* ==================== 系统消息 ==================== */
+        .message.system {
+            align-self: center;
+            background: rgba(74, 222, 128, 0.1);
+            border: 1px solid rgba(74, 222, 128, 0.2);
+            color: #4ade80;
+            border-radius: 8px;
+            font-size: 12px;
+            max-width: 90%;
+            text-align: center;
+        }
+
+        /* ==================== 响应式 ==================== */
+        @media (max-width: 640px) {
+            .message {
+                max-width: 85%;
+            }
+            .header {
+                flex-direction: column;
+                gap: 8px;
+                align-items: stretch;
+            }
+            .header-right {
+                flex-wrap: wrap;
+            }
+            .header-right input {
+                flex: 1;
+            }
+            .input-area {
+                padding: 12px 16px;
+            }
+            .input-area button {
+                padding: 12px 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ==================== 顶部栏 ==================== -->
+    <div class="header">
+        <div class="header-left">
+            <span class="logo">🤖 AI Agent</span>
+            <span class="status-dot"></span>
+            <span class="status-text" id="statusText">已连接</span>
+        </div>
+        <div class="header-right">
+            <label for="userId">用户ID</label>
+            <input type="text" id="userId" value="web_user" placeholder="输入用户ID" onchange="switchUser()">
+            <button onclick="switchUser()" style="background:transparent;border:1px solid #3a7bd5;border-radius:8px;padding:6px 12px;color:#3a7bd5;cursor:pointer;font-size:13px;">切换用户</button>
+            <button onclick="clearChat()" style="background:transparent;border:1px solid #3a3a5a;border-radius:8px;padding:6px 12px;color:#888;cursor:pointer;font-size:13px;">清空</button>
+        </div>
+    </div>
+
+    <!-- ==================== 聊天区域 ==================== -->
+    <div class="chat-container" id="chatContainer"></div>
+
+    <!-- ==================== 正在输入指示器 ==================== -->
+    <div class="typing-indicator" id="typingIndicator">
+        <span></span><span></span><span></span>
+    </div>
+
+    <!-- ==================== 输入区 ==================== -->
+    <div class="input-area">
+        <input type="text" id="messageInput" placeholder="输入消息，按 Enter 发送..." autofocus>
+        <button id="sendBtn" onclick="sendMessage()">发送</button>
+    </div>
+
+    <script>
+        // ==================== WebSocket 连接 ====================
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/chat`;
+        let ws = null;
+        let reconnectTimer = null;
+        let messageQueue = []; // 重连后自动重发
+
+        const chatContainer = document.getElementById('chatContainer');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const typingIndicator = document.getElementById('typingIndicator');
+        const statusText = document.getElementById('statusText');
+
+        function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) return;
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = function() {
+                console.log('[WS] 已连接');
+                statusText.textContent = '已连接';
+                statusText.style.color = '#4ade80';
+                sendBtn.disabled = false;
+
+                // 发送队列中的消息
+                while (messageQueue.length > 0) {
+                    const msg = messageQueue.shift();
+                    ws.send(JSON.stringify(msg));
+                }
+            };
+
+            ws.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    handleServerMessage(data);
+                } catch (e) {
+                    console.error('[WS] 解析消息失败:', e);
+                }
+            };
+
+            ws.onerror = function(err) {
+                console.error('[WS] 错误:', err);
+                statusText.textContent = '连接错误';
+                statusText.style.color = '#f87171';
+            };
+
+            ws.onclose = function() {
+                console.log('[WS] 连接关闭');
+                statusText.textContent = '已断开，重连中...';
+                statusText.style.color = '#fbbf24';
+                sendBtn.disabled = true;
+
+                // 自动重连
+                if (reconnectTimer) clearTimeout(reconnectTimer);
+                reconnectTimer = setTimeout(() => {
+                    console.log('[WS] 尝试重连...');
+                    connectWebSocket();
+                }, 3000);
+            };
+        }
+        // ==================== 切换用户 ====================
+        function switchUser() {
+            const userId = document.getElementById('userId').value.trim() || 'web_user';
+            
+            // 清空聊天显示
+            chatContainer.innerHTML = '';
+            
+            // 加一条系统提示
+            addMessage('system', `👤 已切换到用户: ${userId}`);
+            addMessage('assistant', `诶嘿～切换到 ${userId} 啦！我是小柚，笨蛋主人的专属元气助手哒哟！有什么想聊的尽管说～`);
+            
+            // 重新连接 WebSocket（让后端会话重置）
+            if (ws) {
+                ws.close();
+            }
+            connectWebSocket();
+        }
+
+        // ==================== 处理服务端消息 ====================
+        function handleServerMessage(data) {
+            typingIndicator.classList.remove('show');
+
+            if (data.type === 'message') {
+                addMessage('assistant', data.content);
+            } else if (data.type === 'error') {
+                addMessage('error', '⚠️ ' + data.content);
+            } else if (data.type === 'system') {
+                addMessage('system', data.content);
+            } else if (data.type === 'debug') {
+                console.log('[调试]', data.content);
+            }
+        }
+
+        // ==================== 添加消息气泡 ====================
+        function addMessage(role, content) {
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+            let label = '';
+            if (role === 'user') label = '你';
+            else if (role === 'assistant') label = '🤖 AI';
+            else if (role === 'error') label = '⚠️';
+            else if (role === 'system') label = 'ℹ️';
+
+            div.innerHTML = `
+                <div class="msg-label">${label}</div>
+                <div>${escapeHtml(content)}</div>
+                <div class="msg-time">${timeStr}</div>
+            `;
+
+            chatContainer.appendChild(div);
+            scrollToBottom();
+        }
+
+        // ==================== 发送消息 ====================
+        function sendMessage() {
+            const text = messageInput.value.trim();
+            if (!text) return;
+
+            const user_id = document.getElementById('userId').value.trim() || 'web_user';
+
+            // 显示用户消息
+            addMessage('user', text);
+            messageInput.value = '';
+            messageInput.focus();
+
+            // 显示正在输入
+            typingIndicator.classList.add('show');
+
+            // 通过 WebSocket 发送
+            const payload = { user_id: user_id, message: text };
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(payload));
+            } else {
+                addMessage('error', '⚠️ 未连接到服务器，消息已加入队列...');
+                messageQueue.push(payload);
+                connectWebSocket();
+            }
+        }
+
+        // ==================== 清空聊天 ====================
+        function clearChat() {
+            if (confirm('确定清空聊天记录？只是清空显示，不影响记忆。')) {
+                chatContainer.innerHTML = '';
+                addMessage('system', '聊天显示已清空');
+            }
+        }
+
+        // ==================== 工具函数 ====================
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function scrollToBottom() {
+            setTimeout(() => {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }, 50);
+        }
+
+        // ==================== 事件绑定 ====================
+        messageInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // ==================== 启动 ====================
+        // 初始连接
+        connectWebSocket();
+
+        // 欢迎消息
+        addMessage('system', '💛 小柚已上线！元气满满地开始聊天吧～输入 exit 或 quit 可结束会话的说！');
+        addMessage('assistant', '呐呐！笨蛋主人你来啦～小柚等你好久了！今天想聊点什么呢？诶嘿～');
+    </script>
+
+</body>
+</html>
