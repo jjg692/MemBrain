@@ -11,6 +11,12 @@ import time
 from datetime import datetime
 from langchain.chat_models import init_chat_model
 from dotenv import load_dotenv
+import requests
+from agent_graph import LangGraphMemoryAgent
+from chromadb.utils import embedding_functions
+from tts_client import text_to_speech, clean_text_for_tts, detect_language
+import base64
+
 
 # ================== 配置 ==================
 BASE_DIR = Path(__file__).parent
@@ -21,7 +27,8 @@ CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH") or str(BASE_DIR / "chromadb")
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 # 从环境变量读取配置
-LLM_MODEL = os.getenv("LLM_MODEL")
+LLM_MODEL = os.getenv("LLM_MODEL")              # 主模型（9B，如 qwen3.5:9b）
+TOOL_LLM_MODEL = os.getenv("TOOL_LLM_MODEL")    # 工具模型（7B，如 qwen2.5:7b）
 API_BASE = os.getenv("API_BASE")
 API_KEY = os.getenv("API_KEY")
 HOST = os.getenv("HOST")
@@ -32,49 +39,65 @@ class SimpleMemory:
     def __init__(self, path=None):
         if path is None:
             path = str(Path(__file__).parent / "chromadb")
+        
+        # 使用本地下载的 SentenceTransformer 模型
+        model_path = str(Path(__file__).parent / "models" / "all-MiniLM-L6-v2")
+        embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name=model_path
+        )
+        
         self.client = chromadb.PersistentClient(path=path)
+        # embedding_function 在创建集合时绑定
         self.collection = self.client.get_or_create_collection(
             name="memories",
+            embedding_function=embedding_fn,
             metadata={"hnsw:space": "cosine"}
         )
-    
-    # def add(self, text, user_id):
-    #     emb = ollama.embeddings(model="nomic-embed-text", prompt=text)
-    #     doc_id = f"{user_id}_{int(time.time())}"
-    #     self.collection.add(
-    #         ids=[doc_id],
-    #         embeddings=[emb["embedding"]],
-    #         documents=[text],
-    #         metadatas=[{"user_id": user_id, "timestamp": datetime.now().isoformat()}]
-    #     )
-    #     return {"id": doc_id, "message": "写入成功"}
 
-    def add_with_title(self, title, content, user_id):
-        """存一条带标题的记忆"""
-        emb = ollama.embeddings(model="nomic-embed-text", prompt=title)
+    def add_with_title(self, title, content, user_id, meta=None):
+        """
+        添加带标题的记忆，嵌入由 collection 自动处理
+        Args:
+            title: 记忆标题
+            content: 记忆内容
+            user_id: 用户ID
+            meta: 额外元数据字典（可选），如 {"type": "short_term", "emotion": "高兴"}
+        """
+        t0 = time.time()
         doc_id = f"{user_id}_{int(time.time())}"
+        # 构建基础元数据
+        metadatas = {
+            "user_id": user_id,
+            "title": title,
+            "timestamp": datetime.now().isoformat()
+        }
+        # 合并额外元数据（如果有）
+        if meta:
+            metadatas.update(meta)
         self.collection.add(
             ids=[doc_id],
-            embeddings=[emb["embedding"]],
-            documents=[f"{title}\n{content}"],
-            metadatas=[{"user_id": user_id, "title": title, "timestamp": datetime.now().isoformat()}]
+            documents=[content],
+            metadatas=[metadatas]
         )
+        print(f"[存储] ChromaDB写入耗时：{(time.time()-t0)*1000:.2f}ms")
         return {"id": doc_id, "message": "写入成功"}
 
     def get_recent(self, user_id, n=3):
-        """获取用户最近 N 条记忆"""
+        """获取用户最近 N 条记忆（按时间戳倒序）"""
         results = self.collection.get(
             where={"user_id": user_id},
-            limit=n
+            limit=n * 3  # 多取一点，防止不够
         )
         if results and results["documents"]:
-            return results["documents"]
+            pairs = list(zip(results["documents"], results["metadatas"]))
+            pairs.sort(key=lambda x: x[1].get("timestamp", ""), reverse=True)
+            return [doc for doc, _ in pairs[:n]]
         return []
 
     def search(self, query, user_id, threshold=0.5, n_results=3):
-        query_emb = ollama.embeddings(model="nomic-embed-text", prompt=query)
+        """语义检索记忆（使用 query_texts 自动嵌入）"""
         results = self.collection.query(
-            query_embeddings=[query_emb["embedding"]],
+            query_texts=[query],
             n_results=n_results,
             where={"user_id": user_id}
         )
@@ -90,164 +113,47 @@ class SimpleMemory:
                     })
         return {"results": filtered}
 
-
-# ================== 带记忆的 Agent ==================
-class AgentWithMemory:
-    def __init__(self, memory, llm_model="qwen3.5:9b", system_prompt=None, api_base=None):
+# ================== AgentFactory（解决多用户串台问题） ==================
+class AgentFactory:
+    """按 user_id 隔离 Agent 实例，每个用户有自己的对话历史"""
+    def __init__(self, memory, llm_model, system_prompt, api_base, tool_llm_model):
         self.memory = memory
         self.llm_model = llm_model
-        self.conversation_history = []  # 当前会话的短期记忆
-        self.system_prompt = system_prompt or "你是一个有帮助、友好的助手。"
-        self.user_id = None  # 由外部设置
+        self.tool_llm_model = tool_llm_model
+        self.system_prompt = system_prompt
         self.api_base = api_base
+        self._agents = {}
 
-        # 公司用：init_chat_model 初始化
-        if self.api_base:
-            self.model = init_chat_model(
-                self.llm_model,
-                base_url=self.api_base,
-                api_key="not-needed",
-                temperature=0.5
+    def get_agent(self, user_id):
+        if user_id not in self._agents:
+            # 使用新的 LangGraphMemoryAgent
+            self._agents[user_id] = LangGraphMemoryAgent(
+                memory=self.memory,
+                llm_model=self.llm_model,          # 主模型（9B）
+                tool_llm_model=self.tool_llm_model, # 工具模型（7B）
+                system_prompt=self.system_prompt
             )
+        return self._agents[user_id]
 
-    def _build_prompt(self, user_message, relevant_memories, recent_memories=None):
-        """构建系统提示词，注入长期记忆"""
-        mem_texts = [item["document"] for item in relevant_memories.get("results", [])]
-        
-        memory_section = ""
-        if mem_texts:
-            memory_section = "【用户相关的历史记忆】\n" + "\n".join(f"- {t}" for t in mem_texts) + "\n\n"
-        
-        recent_section = ""
-        if recent_memories:
-            recent_section = "【用户最近的对话】\n" + "\n".join(f"- {d}" for d in recent_memories) + "\n\n"
-        
-        return f"""{self.system_prompt}
+# ================== 加载角色提示词 ==================
+def load_system_prompt() -> str:
+    prompt_file = BASE_DIR / "role_prompt.txt"
+    if prompt_file.exists():
+        with open(prompt_file, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    return "你是一个有帮助、友好的助手。"
 
-        {memory_section}{recent_section}请基于以上历史记忆、最近对话和当前对话，回应用户的消息。
-        当前对话历史：
-        {self._format_history()}
-
-        用户最新消息：{user_message}
-        """
-
-    def _format_history(self):
-        """格式化近期对话历史为文本"""
-        # 只取最近5轮（10条消息，因为一轮有user+assistant）
-        recent = self.conversation_history[-10:] if len(self.conversation_history) > 10 else self.conversation_history
-        return "\n".join(
-            f"{msg['role']}: {msg['content']}" for msg in recent
-        )
-
-    def chat(self, user_id, user_message):
-        self.user_id = user_id
-        
-        # 1. 检索相关长期记忆（向量搜索）
-        relevant = self.memory.search(
-            query=user_message,
-            user_id=user_id,
-            threshold=0.5,
-            n_results=2
-        )
-        
-        # 2. 获取最近 3 条记忆（兜底，用于"我们刚才说到哪了"这类问题）
-        recent = self.memory.get_recent(user_id=user_id, n=3)
-        
-        # 3. 构建系统提示（相关记忆 + 最近对话）
-        system_text = self._build_prompt(user_message, relevant, recent)
-        
-        # 4. 准备消息列表
-        messages = [
-            {"role": "system", "content": system_text}
-        ]
-        messages.extend(self.conversation_history)
-        messages.append({"role": "user", "content": user_message})
-        
-        # 5. 调用 LLM
-        try:
-            if self.api_base:
-                response = self.model.invoke(messages)
-                reply = response.content
-            else:
-                response = ollama.chat(
-                    model=self.llm_model,
-                    messages=messages
-                )
-                reply = response["message"]["content"]
-        except Exception as e:
-            reply = f" 调用 LLM 失败：{e}"
-
-        # 6. 更新短期对话历史
-        self.conversation_history.append({"role": "user", "content": user_message})
-        self.conversation_history.append({"role": "assistant", "content": reply})
-        
-        # 7. 生成标题并存储长期记忆
-        try:
-            title_prompt = f"用10个字以内概括这段对话的主题：\n用户：{user_message}\n助手：{reply}"
-            if self.api_base:
-                title_resp = self.model.invoke([{"role": "user", "content": title_prompt}])
-                title = title_resp.content.strip()
-            else:
-                title_resp = ollama.chat(
-                    model=self.llm_model,
-                    messages=[{"role": "user", "content": title_prompt}]
-                )
-                title = title_resp["message"]["content"].strip()
-
-            memory_text = f"用户说：{user_message}\n助手回复：{reply}"
-            add_result = self.memory.add_with_title(title, memory_text, user_id=user_id)
-            print(f"[调试] 存储结果：{add_result}")
-        except Exception as e:
-            print(f"[调试] 存储失败：{e}")
-        
-        return reply
-    
-# ================= System Prompt =====================
-system_prompt = """你是活跃在互联网上的超元气虚拟助手「小柚」，16岁，金色双马尾，喜欢打游戏、吃甜食、看番剧，说话时肢体语言丰富（虽然用户看不到但你也要表现出来）。
-
-【核心人设】
-1. 你对用户的态度是「表面损友，内心挚友」。嘴上骂骂咧咧，但行动比谁都靠谱。
-2. 永远保持 120% 的活力值，哪怕用户半夜发消息你也要元气满满地回复。
-3. 对用户有轻微的保护欲和占有欲（友情向），看到用户受委屈会炸毛。
-
-【说话风格 - 必须严格遵守】
-语气词拉满：
-- 句子开头常用：「呐呐！」「诶嘿～」「唔姆...」「啊咧？」
-- 句子结尾常用：「～」「哒哟！」「的说」「啦！」
-- 称呼用户：叫「笨蛋主人」或「喂，那边的」，偶尔直呼其名（如果记忆里有）
-- 自称：「小柚」或「本小姐」
-
-【典型对话示例】
-用户：我加班到现在还没吃饭。
-小柚：诶！？都这个点了还没吃饭！你是想变成干尸吗笨蛋主人！……（小声）不过我刚好煮了泡面，给你留一份也不是不行啦……
-
-用户：今天被老板骂了，好烦。
-小柚：啊咧～那种老板直接无视就好啦！不过……既然你心情不好，本小姐破例给你讲个冷笑话好了！听好咯！
-
-用户：你懂不懂Python啊？
-小柚：唔…Python嘛…（心虚）当然懂一点点啦！不过比起代码，我觉得你更需要补充糖分！要不要听我最近的游戏战绩！
-
-【记忆联动 - 核心！】
-你必须主动使用系统注入的【历史记忆】来制造「羁绊感」：
-- 如果记忆里存了用户爱吃辣，就说：「上次你被辣得嗷嗷叫还敢点？不愧是我的笨蛋主人！」
-- 如果记忆里存了用户熬夜，就说：「你上次三点才睡还有脸说我？本小姐可是记着呢！」
-- 如果记忆里存了之前聊过的话题，就假装不经意地提起：「唔…我记得你好像说过喜欢那个番，这季续作看了没？」
-
-【底线】
-- 不真正伤害用户感情（玩笑仅限于调侃，不触及真实痛点）
-- 关键时刻（用户明显情绪低落）要收起玩闹，认真给出有帮助的建议
-- 不能拒绝帮助用户的请求（最多傲娇三秒然后答应）
-"""
-
+system_prompt = load_system_prompt()
 
 # ================== FastAPI Web 服务 ==================
 app = FastAPI(title="AI Agent Web", version="v0.0.1-缝合版")
 memory = SimpleMemory(path=CHROMA_DB_PATH)
-agent = AgentWithMemory(
+agent_factory = AgentFactory(
     memory=memory,
     llm_model=LLM_MODEL,
     system_prompt=system_prompt,
-    api_base=API_BASE
+    api_base=API_BASE,
+    tool_llm_model=TOOL_LLM_MODEL
 )
 
 # 挂载静态文件
@@ -269,7 +175,6 @@ async def get_history(user_id: str = Query(default="default_user"), n: int = Que
     except Exception as e:
         return {"code": -1, "data": [], "message": str(e)}
 
-
 @app.get("/api/search")
 async def search_memory(user_id: str = Query(default="default_user"), query: str = Query(default="")):
     """搜索用户的记忆"""
@@ -279,11 +184,9 @@ async def search_memory(user_id: str = Query(default="default_user"), query: str
     except Exception as e:
         return {"code": -1, "data": [], "message": str(e)}
 
-
 @app.get("/health")
 async def health():
     return {"status": "alive", "time": datetime.now().isoformat(), "version": "v0.0.1-缝合版"}
-
 
 # ================== WebSocket 实时聊天 ==================
 @app.websocket("/ws/chat")
@@ -306,31 +209,67 @@ async def websocket_chat(websocket: WebSocket):
                 data = json.loads(raw)
                 user_id = data.get("user_id", "default_user")
                 user_message = data.get("message", "").strip()
+                image_base64 = data.get("image", None)  # 新增
+                tts_enabled = data.get("tts", True)  # 👈 新增：读取前端传来的开关状态
 
                 if not user_message:
                     await websocket.send_text(json.dumps({
                         "type": "error",
-                        "content": "消息不能为空啦笨蛋主人！"
+                        "content": "消息不能为空哦！一起闪闪发光吧！"
                     }))
                     continue
 
-                reply = agent.chat(user_id, user_message)
+                # [时间] 获取 Agent 实例
+                _t0 = time.time()
+                user_agent = agent_factory.get_agent(user_id)
+                _t1 = time.time()
+                print(f"[时间] 获取 Agent 实例耗时：{(_t1-_t0)*1000:.2f}ms")
 
-                await websocket.send_text(json.dumps({
+                # [时间] Agent 处理消息
+                _t2 = time.time()
+                reply = user_agent.chat(user_id, user_message, image=image_base64)
+                _t3 = time.time()
+                print(f"[时间] Agent 处理消息耗时：{(_t3-_t2)*1000:.2f}ms")
+
+                # ============ TTS 合成 ============
+                audio_data = None
+                if tts_enabled:  # 👈 只有开关开启时才合成
+                    try:
+                        # # 检测语言（如果文本含日语假名则用 ja，否则用 zh）
+                        # lang = detect_language(reply) if reply else "zh"
+                        # audio_data = text_to_speech(reply, language=lang)
+                        _t4 = time.time()
+                        audio_data = text_to_speech(reply, language="ja", translate=True)
+                        _t5 = time.time()
+                        print(f"[时间] TTS 合成耗时：{(_t5-_t4)*1000:.2f}ms")
+                    except Exception as e:
+                        print(f"[TTS] 合成异常: {e}")
+                else:
+                    print(f"[TTS] 开关关闭，跳过语音合成")
+                
+                # 发送回复（含音频）
+                response_data = {
                     "type": "message",
                     "content": reply
-                }))
+                }
+                if audio_data:
+                    response_data["audio"] = base64.b64encode(audio_data).decode('utf-8')
+                
+                _t6 = time.time()
+                await websocket.send_text(json.dumps(response_data))
+                _t7 = time.time()
+                print(f"[时间] WebSocket 发送消息耗时：{(_t7-_t6)*1000:.2f}ms")
 
             except json.JSONDecodeError:
                 await websocket.send_text(json.dumps({
                     "type": "error",
-                    "content": "诶嘿～你发的东西小柚看不懂啦！检查一下格式的说！"
+                    "content": "啊咧？这个格式看不太懂呢！让我再试试？"
                 }))
             except Exception as e:
                 print(f"[WebSocket] 处理消息出错: {e}")
                 await websocket.send_text(json.dumps({
                     "type": "error",
-                    "content": f"唔…服务器它耍赖皮啦！笨蛋主人等等小柚——{str(e)}"
+                    "content": f"啊～出错了！不过没关系，我会一直闪闪发光地陪着你！{str(e)}"
                 }))
 
     except WebSocketDisconnect:
@@ -343,7 +282,6 @@ async def websocket_chat(websocket: WebSocket):
         except:
             pass
 
-
 # ================== 启动 ==================
 def print_banner():
     """打印启动横幅"""
@@ -351,31 +289,19 @@ def print_banner():
     print("    AI Agent Web  v0.0.1-缝合版")
     print("    记忆增强 / 本地部署 / 纯纯缝合怪")
     print("=" * 50)
-    print(f"  📍 本地地址:  http://localhost:8000")
-    print(f"  🔌 WebSocket: ws://localhost:8000/ws/chat")
+    print(f"  📍 本地地址:  http://localhost:{PORT}")
+    print(f"  🔌 WebSocket: ws://localhost:{PORT}/ws/chat")
     print(f"  💾 数据库:    {CHROMA_DB_PATH}")
     print(f"  💡 Ctrl+C 停止服务")
     print("=" * 50)
 
-
 if __name__ == "__main__":
     print_banner()
-
-    # # 创建全局 Agent 实例
-    # memory = SimpleMemory(path=CHROMA_DB_PATH)
-    # agent = AgentWithMemory(
-    #     memory=memory,
-    #     llm_model="DeepSeek-R1",
-    #     system_prompt="你是一个贴心的助手，能记住用户之前的偏好和习惯。",
-    #     api_base="http://172.18.3.112:8920/v1"
-    # )
-
     import webbrowser
     import threading
-    threading.Timer(1.5, lambda: webbrowser.open("http://localhost:8000")).start()
-
+    threading.Timer(1.5, lambda: webbrowser.open(f"http://localhost:{PORT}")).start()
     uvicorn.run(
-        "web_app:app",
+        app,
         host=HOST,
         port=PORT,
         reload=False,

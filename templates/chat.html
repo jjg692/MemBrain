@@ -167,6 +167,17 @@
             color: rgba(255,255,255,0.8);
         }
 
+        /* ---------- 消息中的图片 ---------- */
+        .message .msg-image {
+            max-width: 200px;
+            max-height: 200px;
+            border-radius: 8px;
+            margin-top: 8px;
+            display: block;
+            object-fit: contain;
+            background: #1a1a2e;
+        }
+
         /* ==================== 正在输入指示器 ==================== */
         .typing-indicator {
             align-self: flex-start;
@@ -201,16 +212,87 @@
         }
 
         /* ==================== 输入区 ==================== */
+
+        /* ========== 语音合成开关 ========== */
+        .tts-toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 12px;
+            padding: 4px 0;
+            border-bottom: 1px solid #2a2a4a;
+            margin-bottom: 8px;
+        }
+
+        .tts-toggle-row span {
+            font-size: 13px;
+            color: #888;
+            user-select: none;
+        }
+
+        /* 修正：使用 .tts-switch 类，与 CSS 一致 */
+        .tts-switch {
+            position: relative;
+            display: inline-block;
+            width: 48px;
+            height: 26px;
+            flex-shrink: 0;
+        }
+
+        .tts-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .tts-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #3a3a5a;
+            transition: .3s;
+            border-radius: 26px;
+        }
+
+        .tts-slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background-color: #e0e0e0;
+            transition: .3s;
+            border-radius: 50%;
+        }
+
+        .tts-switch input:checked + .tts-slider {
+            background: linear-gradient(135deg, #3a7bd5, #00d2ff);
+        }
+
+        .tts-switch input:checked + .tts-slider:before {
+            transform: translateX(22px);
+        }
+
         .input-area {
             flex-shrink: 0;
             padding: 16px 24px;
             background: #1a1a2e;
             border-top: 1px solid #2a2a4a;
             display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .input-row {
+            display: flex;
             gap: 12px;
         }
 
-        .input-area input {
+        .input-area input[type="text"] {
             flex: 1;
             background: #1e1e3a;
             border: 1px solid #3a3a5a;
@@ -222,11 +304,11 @@
             transition: border 0.2s;
         }
 
-        .input-area input:focus {
+        .input-area input[type="text"]:focus {
             border-color: #3a7bd5;
         }
 
-        .input-area input::placeholder {
+        .input-area input[type="text"]::placeholder {
             color: #666;
         }
 
@@ -259,7 +341,67 @@
             box-shadow: none;
         }
 
-        /* ==================== 错误提示 ==================== */
+        .input-area .btn-image {
+            background: #2a2a4a;
+            border: 1px solid #3a3a5a;
+            padding: 12px 16px;
+            font-size: 18px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+            color: #e0e0e0;
+        }
+
+        .input-area .btn-image:hover {
+            background: #3a3a5a;
+        }
+
+        /* ---------- 图片预览 ---------- */
+        .image-preview {
+            display: none;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 12px;
+            background: #1e1e3a;
+            border-radius: 10px;
+            border: 1px solid #3a3a5a;
+        }
+
+        .image-preview.show {
+            display: flex;
+        }
+
+        .image-preview img {
+            max-height: 60px;
+            max-width: 60px;
+            border-radius: 6px;
+            object-fit: cover;
+        }
+
+        .image-preview .file-name {
+            font-size: 13px;
+            color: #aaa;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .image-preview .btn-remove {
+            background: none;
+            border: none;
+            color: #f87171;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .image-preview .btn-remove:hover {
+            background: rgba(239, 68, 68, 0.2);
+        }
+
+        /* ==================== 错误/系统消息 ==================== */
         .message.error {
             align-self: center;
             background: rgba(239, 68, 68, 0.15);
@@ -271,7 +413,6 @@
             text-align: center;
         }
 
-        /* ==================== 系统消息 ==================== */
         .message.system {
             align-self: center;
             background: rgba(74, 222, 128, 0.1);
@@ -302,7 +443,14 @@
             .input-area {
                 padding: 12px 16px;
             }
+            .input-row {
+                flex-wrap: wrap;
+            }
             .input-area button {
+                flex: 1;
+                padding: 12px 16px;
+            }
+            .input-area .btn-image {
                 padding: 12px 16px;
             }
         }
@@ -335,24 +483,66 @@
 
     <!-- ==================== 输入区 ==================== -->
     <div class="input-area">
-        <input type="text" id="messageInput" placeholder="输入消息，按 Enter 发送..." autofocus>
-        <button id="sendBtn" onclick="sendMessage()">发送</button>
+        <!-- 语音合成开关 -->
+        <div class="tts-toggle-row">
+            <span>🔊 语音合成</span>
+            <label class="tts-switch">
+                <input type="checkbox" id="ttsToggle" checked>
+                <span class="tts-slider"></span>
+            </label>
+        </div>
+
+        <!-- 图片预览 -->
+        <div class="image-preview" id="imagePreview">
+            <img id="previewImg" src="" alt="预览">
+            <span class="file-name" id="previewFileName">image.jpg</span>
+            <button class="btn-remove" onclick="removeImage()">✕</button>
+        </div>
+
+        <!-- 输入行 -->
+        <div class="input-row">
+            <input type="text" id="messageInput" placeholder="输入消息，按 Enter 发送..." autofocus>
+            <button class="btn-image" id="imageBtn" title="上传图片">🖼️</button>
+            <button id="sendBtn" onclick="sendMessage()">发送</button>
+        </div>
+
+        <!-- 隐藏的文件输入 -->
+        <input type="file" id="imageInput" accept="image/*" style="display:none">
     </div>
 
     <script>
+        // ==================== 全局状态 ====================
+        let selectedImageBase64 = null;   // 完整 Base64（含前缀）
+        let selectedImageName = '';
+        let ttsEnabled = true;   // 语音合成开关状态
+
         // ==================== WebSocket 连接 ====================
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws/chat`;
         let ws = null;
         let reconnectTimer = null;
-        let messageQueue = []; // 重连后自动重发
+        let messageQueue = [];
 
         const chatContainer = document.getElementById('chatContainer');
         const messageInput = document.getElementById('messageInput');
         const sendBtn = document.getElementById('sendBtn');
         const typingIndicator = document.getElementById('typingIndicator');
         const statusText = document.getElementById('statusText');
+        const imageInput = document.getElementById('imageInput');
+        const imageBtn = document.getElementById('imageBtn');
+        const imagePreview = document.getElementById('imagePreview');
+        const previewImg = document.getElementById('previewImg');
+        const previewFileName = document.getElementById('previewFileName');
 
+        // ==================== 安全获取 DOM 元素，防止 null ====================
+        function safeGet(id) {
+            const el = document.getElementById(id);
+            if (!el) console.warn(`Element with id "${id}" not found`);
+            return el;
+        }
+        const ttsToggle = safeGet('ttsToggle');
+
+        // ==================== WebSocket 连接 ====================
         function connectWebSocket() {
             if (ws && ws.readyState === WebSocket.OPEN) return;
 
@@ -364,7 +554,6 @@
                 statusText.style.color = '#4ade80';
                 sendBtn.disabled = false;
 
-                // 发送队列中的消息
                 while (messageQueue.length > 0) {
                     const msg = messageQueue.shift();
                     ws.send(JSON.stringify(msg));
@@ -392,7 +581,6 @@
                 statusText.style.color = '#fbbf24';
                 sendBtn.disabled = true;
 
-                // 自动重连
                 if (reconnectTimer) clearTimeout(reconnectTimer);
                 reconnectTimer = setTimeout(() => {
                     console.log('[WS] 尝试重连...');
@@ -400,18 +588,13 @@
                 }, 3000);
             };
         }
+
         // ==================== 切换用户 ====================
         function switchUser() {
             const userId = document.getElementById('userId').value.trim() || 'web_user';
-            
-            // 清空聊天显示
             chatContainer.innerHTML = '';
-            
-            // 加一条系统提示
             addMessage('system', `👤 已切换到用户: ${userId}`);
-            addMessage('assistant', `诶嘿～切换到 ${userId} 啦！我是小柚，笨蛋主人的专属元气助手哒哟！有什么想聊的尽管说～`);
-            
-            // 重新连接 WebSocket（让后端会话重置）
+            addMessage('assistant', `呐呐！切换到 ${userId} 啦！我是户山香澄，让我们一起闪闪发光吧！有什么想聊的尽管说`);
             if (ws) {
                 ws.close();
             }
@@ -423,7 +606,14 @@
             typingIndicator.classList.remove('show');
 
             if (data.type === 'message') {
+                // 显示文字消息
                 addMessage('assistant', data.content);
+
+                // 如果有音频，自动播放
+                if (ttsEnabled && data.audio) {
+                    const audio = new Audio("data:audio/wav;base64," + data.audio);
+                    audio.play().catch(e => console.log('[音频] 播放失败:', e));
+                }
             } else if (data.type === 'error') {
                 addMessage('error', '⚠️ ' + data.content);
             } else if (data.type === 'system') {
@@ -434,7 +624,7 @@
         }
 
         // ==================== 添加消息气泡 ====================
-        function addMessage(role, content) {
+        function addMessage(role, content, imageBase64) {
             const div = document.createElement('div');
             div.className = `message ${role}`;
 
@@ -447,9 +637,15 @@
             else if (role === 'error') label = '⚠️';
             else if (role === 'system') label = 'ℹ️';
 
+            let imageHtml = '';
+            if (imageBase64) {
+                imageHtml = `<img class="msg-image" src="${imageBase64}" alt="图片">`;
+            }
+
             div.innerHTML = `
                 <div class="msg-label">${label}</div>
                 <div>${escapeHtml(content)}</div>
+                ${imageHtml}
                 <div class="msg-time">${timeStr}</div>
             `;
 
@@ -460,20 +656,29 @@
         // ==================== 发送消息 ====================
         function sendMessage() {
             const text = messageInput.value.trim();
-            if (!text) return;
+            if (!text && !selectedImageBase64) return;
 
             const user_id = document.getElementById('userId').value.trim() || 'web_user';
 
-            // 显示用户消息
-            addMessage('user', text);
+            // 显示用户消息（含图片）
+            addMessage('user', text || '📷 发送了一张图片', selectedImageBase64);
+
+            // 构建 payload
+            const payload = {
+                user_id: user_id,
+                message: text || '这张图片里有什么？',
+                tts: ttsEnabled   // 把开关状态传给后端
+            };
+            if (selectedImageBase64) {
+                payload.image = selectedImageBase64;
+            }
+
+            // 清空输入
             messageInput.value = '';
+            removeImage();
             messageInput.focus();
 
-            // 显示正在输入
             typingIndicator.classList.add('show');
-
-            // 通过 WebSocket 发送
-            const payload = { user_id: user_id, message: text };
 
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify(payload));
@@ -482,6 +687,33 @@
                 messageQueue.push(payload);
                 connectWebSocket();
             }
+        }
+
+        // ==================== 图片选择处理 ====================
+        function handleImageSelect(file) {
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                selectedImageBase64 = e.target.result;
+                selectedImageName = file.name;
+                updateImagePreview(selectedImageBase64, selectedImageName);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function updateImagePreview(base64, name) {
+            previewImg.src = base64;
+            previewFileName.textContent = name;
+            imagePreview.classList.add('show');
+        }
+
+        function removeImage() {
+            selectedImageBase64 = null;
+            selectedImageName = '';
+            imagePreview.classList.remove('show');
+            previewImg.src = '';
+            imageInput.value = '';
         }
 
         // ==================== 清空聊天 ====================
@@ -513,14 +745,43 @@
             }
         });
 
+        imageBtn.addEventListener('click', function() {
+            imageInput.click();
+        });
+
+        imageInput.addEventListener('change', function(e) {
+            if (e.target.files && e.target.files.length > 0) {
+                handleImageSelect(e.target.files[0]);
+            }
+        });
+
+        // 恢复 TTS 开关状态
+        try {
+            const savedTts = localStorage.getItem('ttsEnabled');
+            if (savedTts !== null) {
+                ttsEnabled = savedTts === 'true';
+            }
+            if (ttsToggle) ttsToggle.checked = ttsEnabled;
+        } catch (e) {
+            console.warn('localStorage 访问失败，使用默认开启状态');
+            ttsEnabled = true;
+        }
+
+        // 监听开关变化
+        if (ttsToggle) {
+            ttsToggle.addEventListener('change', function() {
+                ttsEnabled = this.checked;
+                try {
+                    localStorage.setItem('ttsEnabled', String(ttsEnabled));
+                } catch (e) {}
+                console.log('[TTS] 开关状态:', ttsEnabled ? '启用' : '禁用');
+            });
+        }
+
         // ==================== 启动 ====================
-        // 初始连接
         connectWebSocket();
-
-        // 欢迎消息
-        addMessage('system', '💛 小柚已上线！元气满满地开始聊天吧～输入 exit 或 quit 可结束会话的说！');
-        addMessage('assistant', '呐呐！笨蛋主人你来啦～小柚等你好久了！今天想聊点什么呢？诶嘿～');
+        addMessage('system', '⭐ 香澄上线啦！让我们一起寻找闪闪发光的东西吧！支持图片上传哦～');
+        addMessage('assistant', '呐呐！你来啦～香澄等你好久了！今天想聊点什么呢？キラキラ☆ドキドキ！');
     </script>
-
 </body>
 </html>
