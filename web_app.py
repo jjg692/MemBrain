@@ -94,12 +94,16 @@ class SimpleMemory:
             return [doc for doc, _ in pairs[:n]]
         return []
 
-    def search(self, query, user_id, threshold=0.5, n_results=3):
-        """语义检索记忆（使用 query_texts 自动嵌入）"""
+    def search(self, query, user_id, threshold=0.5, n_results=3, where=None):
+        """语义检索记忆（使用 query_texts 自动嵌入），支持额外的 where 过滤"""
+        filter_condition = {"user_id": user_id}
+        if where:
+            # ChromaDB 要求 where 条件不能有多个顶层键，所以用 $and 组合
+            filter_condition = {"$and": [{"user_id": user_id}, where]}
         results = self.collection.query(
             query_texts=[query],
             n_results=n_results,
-            where={"user_id": user_id}
+            where=filter_condition
         )
         filtered = []
         if results["documents"] and results["documents"][0]:
@@ -112,6 +116,28 @@ class SimpleMemory:
                         "timestamp": results["metadatas"][0][i].get("timestamp", "")
                     })
         return {"results": filtered}
+    
+    def get_recent_conversations(self, user_id, n=10):
+        """获取用户最近 N 条对话记录（按时间戳倒序），只返回 type='short_term' 或 type='conversation' 的记忆"""
+        # 兼容旧数据：如果元数据中没有 type 字段，我们仍然获取，但优先筛选有 type 的
+        results = self.collection.get(
+            where={"user_id": user_id},
+            limit=n * 3  # 多取一些，防止过滤后不足
+        )
+        if not results or not results["documents"]:
+            return []
+        # 按时间戳倒序排序
+        pairs = list(zip(results["documents"], results["metadatas"]))
+        pairs.sort(key=lambda x: x[1].get("timestamp", ""), reverse=True)
+        # 过滤出 type 为 short_term 或 conversation 的记录（兼容旧数据没有 type）
+        filtered = []
+        for doc, meta in pairs:
+            doc_type = meta.get("type", "short_term")  # 默认视为短期记忆
+            if doc_type in ("short_term", "conversation"):
+                filtered.append(doc)
+                if len(filtered) >= n:
+                    break
+        return filtered
 
 # ================== AgentFactory（解决多用户串台问题） ==================
 class AgentFactory:

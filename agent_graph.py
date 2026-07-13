@@ -303,7 +303,7 @@ class LangGraphMemoryAgent:
             user_id=user_id,
             threshold=0.4,        # 阈值稍低，召回更多
             n_results=3,
-            filter={"type": "short_term"}  # 只检索短期记忆
+            where={"type": "short_term"}   # 只检索短期记忆
         )
         # 2. 检索长期记忆（摘要）
         long_term_results = self.memory.search(
@@ -311,7 +311,7 @@ class LangGraphMemoryAgent:
             user_id=user_id,
             threshold=0.5,
             n_results=2,
-            filter={"type": "long_term"}   # 只检索长期记忆
+            where={"type": "long_term"}    # 只检索长期记忆
         )
         # 3. 合并结果（去重，优先短期记忆）
         all_memories = []
@@ -350,7 +350,7 @@ class LangGraphMemoryAgent:
                 chat_messages.append({"role": msg["role"], "content": msg["content"]})
             chat_messages.append({"role": "user", "content": user_message})
 
-            final_reply = self._generate_with_main_model(chat_messages, image, tools=None)
+            final_reply = self._generate_with_main_model(chat_messages, image)
 
             self.conversation_history.append({"role": "user", "content": user_message})
             self.conversation_history.append({"role": "assistant", "content": final_reply})
@@ -460,7 +460,7 @@ class LangGraphMemoryAgent:
 
         # 2. 指代消解：调用工具模型（不绑定工具）获取所有可能的候选实体
         resolve_prompt = f"""
-        你是一个指代消解器。请根据上下文，找出用户问题中的指代词（如"那个"、"这款"、"刚才说的"）可能指向的所有候选实体。
+        你是一个指代消解器。请根据上下文，找出用户问题中的指代词（如"那个"、"这款"、"刚才说的"）**具体指向哪个实体对象**。
 
         【上下文】
         {recent_context}
@@ -469,11 +469,14 @@ class LangGraphMemoryAgent:
         {user_message}
 
         【任务】
-        1. 找出用户问题中的指代词可能指向的所有候选实体。
-        2. 每个候选实体给出一个简短的理由，说明为什么它可能是指代对象。
-        3. 如果只有一个明确的候选，输出：单候选：[候选实体]
-        4. 如果有多个候选，输出：多候选：[候选实体1]、[候选实体2]、[候选实体3]
-        5. 如果找不到候选，输出：无候选
+        1. 找出用户问题中的指代词具体指向的**实体名称**（如具体的餐馆名、游戏名、地名），而不是类别名称（如"餐馆"、"游戏"）。
+        2. 如果指代对象是多个，列出所有可能的实体名称。
+        3. 如果找不到明确的实体，输出：无候选
+
+        【输出格式】
+        - 单候选：[实体名称]
+        - 多候选：[实体名称1]、[实体名称2]
+        - 无候选
 
         只输出以上格式，不要输出其他内容。
         """
@@ -702,6 +705,10 @@ class LangGraphMemoryAgent:
         1. 如果搜索结果中包含了用户提到的实体（如游戏名、人名），请基于搜索结果回答。
         2. 如果搜索结果中没有找到相关信息，请如实告知用户，不要编造。
         3. 如果搜索结果不完整，可以告知用户信息有限。
+
+        【日期校验规则】
+        1. 当前真实日期是：{current_date}
+        2. 如果搜索结果中的日期与当前日期不符，请忽略搜索结果中的日期，使用当前日期。
 
         用户最新消息：{user_message}
         """
