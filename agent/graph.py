@@ -176,11 +176,25 @@ class LangGraphMemoryAgent:
         【任务】
         1. 如果原问题中有指代词（"那个"、"这款"、"刚才的"等），将其替换为具体的实体名称。
         2. 如果原问题中有省略（如"那明天呢"），补充缺失的信息（如"长沙明天天气怎么样"）。
-        3. 如果原问题已经很完整，直接输出原问题。
-        4. 输出格式为 JSON：{{"rewritten": "改写后的问题", "changed": true/false, "reason": "改动原因"}}
+        3. 如果原问题中缺少主语或宾语，根据上下文补全。
+        4. **不要改变原问题的性质**：
+        - 如果原问题是陈述句，保持陈述句。
+        - 如果原问题是疑问句，保持疑问句。
+        - 如果原问题是询问（如"怎么样"、"是什么"），保持询问。
+        - 如果原问题是请求（如"推荐"、"帮我查"），保持请求。
+        5. **不要添加原问题中没有的意图**：
+        - 如用户没说"好看吗"，就不要加"好看吗"。
+        - 如用户没说"怎么样"，就不要加"怎么样"。
+        6. 如果原问题已经很完整，直接输出原问题。
+        7. 输出格式为 JSON：{{"rewritten": "改写后的问题", "changed": true/false, "reason": "改动原因"}}
 
-        【输出】
-        只输出 JSON。
+        【输出格式】
+        根据情况输出对应 JSON：
+        - 成功改写：{"status": "success", "rewritten": "改写后的问题", "entity": "实体名"}
+        - 多个候选：{"status": "multiple", "candidates": ["候选1", "候选2"], "rewritten": "原问题"}
+        - 无指代或改写失败：{"status": "failed", "rewritten": "原问题"}
+
+        只输出 JSON，不要输出其他内容。
         """
         try:
             result = self.tool_adapter.chat_with_tools(
@@ -192,12 +206,19 @@ class LangGraphMemoryAgent:
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
             if json_match:
                 data = json.loads(json_match.group())
+                status = data.get("status", "failed")
                 rewritten = data.get("rewritten", user_message)
-                changed = data.get("changed", False)
-                if changed and rewritten != user_message:
-                    print(f"[查询改写] {user_message} → {rewritten}")
-                    return {"need_rewrite": True, "query": rewritten}
-            return {"need_rewrite": False, "query": user_message}
+                candidates = data.get("candidates", [])
+                
+                if status == "success" and rewritten != user_message:
+                    print(f"[查询改写] 成功: {user_message} → {rewritten}")
+                    return {"status": "success", "query": rewritten, "entity": data.get("entity", "")}
+                elif status == "multiple" and candidates:
+                    print(f"[查询改写] 多候选: {candidates}")
+                    return {"status": "multiple", "candidates": candidates, "query": user_message}
+                else:
+                    return {"status": "failed", "query": user_message}
+            return {"status": "failed", "query": user_message}
         except Exception as e:
             print(f"[查询改写] 失败: {e}")
             return {"need_rewrite": False, "query": user_message}
@@ -216,15 +237,43 @@ class LangGraphMemoryAgent:
         last_msg = messages[-1] if messages else None
         user_message = last_msg.content if last_msg and hasattr(last_msg, 'content') else ""
 
-        # ========== 查询改写（所有消息都过） ==========
+                # ========== 查询改写（所有消息都过） ==========
         rewrite_result = self._rewrite_query(user_message, state)
-        if rewrite_result.get("need_rewrite", False):
+        status = rewrite_result.get("status", "failed")
+        
+        if status == "success":
             rewritten = rewrite_result.get("query", user_message)
             if rewritten != user_message:
-                log_debug("Agent", f"查询改写: {user_message} → {rewritten}")
+                log_debug("Agent", f"查询改写成功: {user_message} → {rewritten}")
                 state["messages"][-1] = {"role": "user", "content": rewritten}
                 user_message = rewritten
-        # ================================================
+        elif status == "multiple":
+            candidates = rewrite_result.get("candidates", [])
+            log_debug("Agent", f"查询改写多候选: {candidates}")
+            # 生成询问回复，让用户选择
+            ask_prompt = f"""
+            用户使用了指代词，可能指向以下多个实体：
+            {', '.join(candidates)}
+
+            请生成一段友好的、符合角色人设的回复，向用户确认具体是指哪一个。
+            列出所有候选实体，让用户从中选择。
+            """
+            ask_result = self.tool_adapter.chat_with_tools(
+                messages=[{"role": "system", "content": ask_prompt}],
+                tools=None
+            )
+            reply = ask_result.get("content", f"呐呐～你说的'那个'是指 {', '.join(candidates)} 中的哪一个呢？")
+            self.conversation_history.append({"role": "user", "content": user_message})
+            self.conversation_history.append({"role": "assistant", "content": reply})
+            # 直接返回询问，不继续路由
+            return {
+                "messages": [{"role": "assistant", "content": reply}],
+                "iteration": state.get("iteration", 0) + 1,
+                "image": state.get("image", None),
+                "query_type": "PERSONAL"
+            }
+        # status == "failed" 时，保持原问题不变，继续走路由
+        # =====================================================
 
         log_debug("Agent", f"收到用户消息: {user_message[:50]}...")
         log_time("Agent节点开始", _start)
