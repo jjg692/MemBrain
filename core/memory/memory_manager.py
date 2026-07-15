@@ -1,110 +1,208 @@
-# core/memory/memory_manager.py 迁移记忆存储/摘要逻辑
+"""
+记忆管理器 - 五层记忆架构（无 L3）
+- L1: 内存上下文（由 graph.py 管理）
+- L2: 短期记忆（向量库，混合检索）
+- L4: 重要事实（向量库，type=fact）
+- L5: 角色记忆（静态）
+"""
 import threading
 import json
 import re
+import time
 from datetime import datetime
+from typing import Optional, List, Dict
 
 from core.adapters import LLMAdapter
-from core.logger import log_debug, log_store
+from core.config import (
+    MEMORY_SHORT_TERM_MAX_ROUNDS,
+    MEMORY_IMPORTANCE_THRESHOLD,
+    MEMORY_DEBUG
+)
+from core.logger import log_store, log_debug
+
+
+def log_dbg(msg: str):
+    if MEMORY_DEBUG:
+        print(f"[MemoryManager] {msg}")
 
 
 class MemoryManager:
-    """记忆管理：存储、加载、摘要生成"""
-    
-    def __init__(self, memory, tool_adapter: LLMAdapter):
+    def __init__(self, memory, tool_adapter: LLMAdapter, main_adapter: Optional[LLMAdapter] = None):
         self.memory = memory
         self.tool_adapter = tool_adapter
+        self.main_adapter = main_adapter or tool_adapter
+        
+        # 延迟初始化混合检索器
+        self._retriever = None
+    
+    @property
+    def retriever(self):
+        """懒加载混合检索器"""
+        if self._retriever is None:
+            from core.memory.retriever import HybridRetriever
+            self._retriever = HybridRetriever(self.memory)
+        return self._retriever
 
-    def save_memory(self, user_id: str, user_message: str, reply: str, query_type: str = None):
+    # ==================== 存储入口 ====================
+    def save_memory(self, user_id: str, user_message: str, reply: str,
+                    query_type: str = None, importance: float = 0.3) -> None:
         """
-        后台存储记忆（优化版）
-        1. 存储短期记忆：原始对话，带轮次和类型标记
-        2. 异步生成长期记忆摘要（如果开启）
+        异步存储记忆（入口方法）
+        - 存 L2 短期记忆
+        - 判断重要性，触发 L4 事实抽取
         """
         try:
-            # ========== 存储短期记忆（原始对话） ==========
-            # 每条对话作为独立条目，带 type="short_term" 和轮次
-            # 使用当前时间戳作为排序依据
-            short_term_doc = f"用户说：{user_message}\n助手回复：{reply}"
-            short_term_meta = {
-                "user_id": user_id,
-                "type": "short_term",
-                "timestamp": datetime.now().isoformat(),
-                "query_type": query_type or "UNKNOWN",
-            }
-            add_result = self.memory.add_with_title(
-                title=f"{user_message[:15]}...",
-                content=short_term_doc,
+            # === L2: 存储短期记忆 ===
+            doc = f"用户说：{user_message}\n助手回复：{reply}"
+            self.memory.add_with_title(
+                title=user_message[:15] + "...",
+                content=doc,
                 user_id=user_id,
-                meta=short_term_meta
+                meta={
+                    "type": "short_term",
+                    "timestamp": datetime.now().isoformat(),
+                    "query_type": query_type or "UNKNOWN",
+                    "importance": importance
+                }
             )
-            log_store(f"短期记忆存储完成：{add_result}")
+            log_store(f"短期记忆存储完成")
 
-            # ========== 异步清理旧短期记忆（保留最近10轮） ==========
+            # === L2: 异步清理旧短期记忆（保留50轮） ===
             threading.Thread(
                 target=self.memory.clean_old_short_term,
-                args=(user_id, 10),
+                args=(user_id, MEMORY_SHORT_TERM_MAX_ROUNDS),
                 daemon=True
             ).start()
 
-            # ========== 异步生成长期记忆摘要 ==========
-            threading.Thread(
-                target=self._generate_long_term_memory,
-                args=(user_id, user_message, reply, query_type),
-                daemon=True
-            ).start()
+            # === L4: 判断是否需要抽取事实 ===
+            if importance >= MEMORY_IMPORTANCE_THRESHOLD:
+                threading.Thread(
+                    target=self._extract_and_save_facts,
+                    args=(user_id, user_message, reply),
+                    daemon=True
+                ).start()
 
         except Exception as e:
-            log_store(f"存储失败：{e}")
+            log_store(f"存储失败: {e}")
 
-    def _generate_long_term_memory(self, user_id: str, user_message: str, reply: str, query_type: str = None):
-        """
-        后台生成长期记忆摘要（提炼核心信息）
-        使用工具模型（tool_adapter）生成摘要和情绪标签，然后存储到向量库，type="long_term"
-        """
+    # ==================== L4: 事实抽取 ====================
+    def _extract_and_save_facts(self, user_id: str, user_msg: str, assistant_msg: str) -> None:
+        """异步抽取事实并存储（L4）"""
         try:
-            summary_prompt = f"""
-            请根据以下对话，提炼出核心信息摘要（一句话）并判断情绪标签。
+            from core.memory.fact_extractor import extract_facts
+            facts = extract_facts(user_msg, assistant_msg, self.tool_adapter)
+            
+            for fact in facts:
+                self.memory.add_with_title(
+                    title=fact["fact"][:20],
+                    content=fact["fact"],
+                    user_id=user_id,
+                    meta={
+                        "type": "fact",
+                        "category": fact.get("category", "general"),
+                        "importance": MEMORY_IMPORTANCE_THRESHOLD,
+                        "timestamp": datetime.now().isoformat(),
+                        "source": user_msg[:50]
+                    }
+                )
+                log_dbg(f"事实存储: {fact['fact']}")
+        except Exception as e:
+            log_dbg(f"事实抽取失败: {e}")
 
-            对话：
-            用户：{user_message}
-            助手：{reply}
+    # ==================== 重要性判断（规则版） ====================
+    def judge_importance(self, user_msg: str, assistant_msg: str) -> float:
+        """
+        用 LLM 判断对话重要性（0-1）
+        - 0.0-0.3: 日常闲聊
+        - 0.4-0.6: 涉及个人偏好但表述不明确
+        - 0.7-0.9: 明确表达喜好、承诺、事件、人际关系
+        - 1.0: 极其重要（重大事件、情感宣泄、明确承诺）
+        """
+        prompt = f"""判断以下对话是否值得长期记住（作为用户的重要事实）：
 
-            输出格式（JSON）：
-            {{"summary": "摘要内容", "emotion": "高兴/生气/难过/惊讶/平静/其他"}}
-            """
+        用户：{user_msg}
+        助手：{assistant_msg}
+
+        评分标准：
+        - 0.0-0.3: 日常闲聊，不包含任何用户个人信息
+        - 0.4-0.6: 涉及用户偏好或习惯，但表述不够明确或强度不足
+        - 0.7-0.9: 明确表达喜好、厌恶、承诺、计划、重要事件、人际关系
+        - 1.0: 极其重要（重大事件、强烈情感表达、明确约定）
+
+        只输出一个数字（0.0-1.0），不要其他内容。"""
+        
+        try:
             result = self.tool_adapter.chat_with_tools(
-                messages=[{"role": "system", "content": summary_prompt}],
+                messages=[{"role": "system", "content": prompt}],
                 tools=None
             )
-            content = result.get("content", "")
-            # 尝试解析 JSON
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group())
-                summary = data.get("summary", "")
-                emotion = data.get("emotion", "平静")
-            else:
-                # 降级：直接截取前30字
-                summary = content[:50] + ("..." if len(content) > 50 else "")
-                emotion = "平静"
-
-            # 存储长期记忆
-            long_term_doc = f"【摘要】{summary}（情绪：{emotion}）"
-            long_term_meta = {
-                "user_id": user_id,
-                "type": "long_term",
-                "timestamp": datetime.now().isoformat(),
-                "emotion": emotion,
-                "query_type": query_type or "UNKNOWN",
-                "summary": summary,
-            }
-            add_result = self.memory.add_with_title(
-                title=summary[:15] + "...",
-                content=long_term_doc,
-                user_id=user_id,
-                meta=long_term_meta
-            )
-            log_store(f"长期记忆存储完成：{add_result}")
+            content = result.get("content", "").strip()
+            import re
+            match = re.search(r'(\d+\.?\d*)', content)
+            if match:
+                score = float(match.group(1))
+                return min(max(score, 0.0), 1.0)
+            return 0.3
         except Exception as e:
-            log_store(f"长期记忆生成失败：{e}")
+            print(f"[重要性判断] LLM 调用失败: {e}")
+            return 0.3
+
+    # ==================== L1: 上下文压缩 ====================
+    def compress_context(self, rounds: List[Dict]) -> str:
+        """
+        压缩多轮对话为摘要（用于 L1 上下文压缩）
+        返回压缩后的摘要文本
+        """
+        if not rounds:
+            return ""
+        try:
+            text = "\n".join([
+                f"{r.get('role', 'unknown')}: {r.get('content', '')}"
+                for r in rounds if r.get('role') != 'system'
+            ])
+            if not text.strip():
+                return ""
+            
+            prompt = f"请用一句话总结以下对话的核心内容：\n{text}"
+            result = self.tool_adapter.chat_with_tools(
+                messages=[{"role": "system", "content": prompt}],
+                tools=None
+            )
+            summary = result.get("content", "").strip()
+            if not summary:
+                summary = text[:50] + "..."
+            log_dbg(f"上下文压缩: {summary[:50]}...")
+            return summary
+        except Exception as e:
+            log_dbg(f"压缩失败: {e}")
+            return text[:50] + "..." if text else ""
+
+    # ==================== L2 + L4 综合检索 ====================
+    def retrieve_memory_context(self, user_id: str, query: str, top_k: int = 5) -> Dict:
+        """
+        综合检索（L4 事实 + L2 短期记忆）
+        返回: {"facts": [...], "short_term": [...], "context": "合并后的文本"}
+        """
+        # === L4: 先拉取事实（精确匹配，优先级高） ===
+        fact_items = self.memory.get_facts(user_id, n=3)
+        fact_texts = [f["document"] for f in fact_items]
+        
+        # === L2: 混合检索短期记忆 ===
+        short_term_results = self.retriever.search(
+            query=query,
+            user_id=user_id,
+            top_k=top_k
+        )
+        short_term_texts = [r["document"] for r in short_term_results]
+        
+        # === 合并上下文（事实优先） ===
+        all_texts = fact_texts + short_term_texts
+        context = "\n".join([f"- {t}" for t in all_texts]) if all_texts else ""
+        
+        log_dbg(f"检索完成: 事实 {len(fact_texts)} 条, 短期 {len(short_term_texts)} 条")
+        return {
+            "facts": fact_texts,
+            "short_term": short_term_texts,
+            "context": context,
+            "raw": short_term_results
+        }

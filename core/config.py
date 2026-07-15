@@ -16,6 +16,20 @@ API_KEY = os.getenv("API_KEY")
 HOST = os.getenv("HOST")
 PORT = int(os.getenv("PORT", 8000))
 BAIDU_API_KEY = os.getenv("BAIDU_API_KEY")
+CROSS_ENCODER_MODEL = os.getenv("CROSS_ENCODER_MODEL")
 
 # ChromaDB 路径：优先用 .env 配置，否则默认用项目目录下的 chromadb
 CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH") or str(BASE_DIR / "chromadb")
+
+# ==================== 记忆系统配置 ====================
+# L1: 内存上下文最大轮数（每轮=一问一答）
+MEMORY_CONTEXT_MAX_ROUNDS = 20
+
+# L2: 短期记忆保留最大轮数（向量库）
+MEMORY_SHORT_TERM_MAX_ROUNDS = 50
+
+# L4: 重要性阈值，高于此值才抽取事实
+MEMORY_IMPORTANCE_THRESHOLD = 0.35
+
+# 调试开关
+MEMORY_DEBUG = True

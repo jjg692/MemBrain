@@ -67,8 +67,10 @@ class LangGraphMemoryAgent:
         # ========== 初始化记忆管理器 ==========
         self.memory_manager = MemoryManager(memory, self.tool_adapter)
 
+        self._fact_extractor_loaded = True  # 占位，实际用 memory_manager 处理
+
         # ========== 短期对话历史（当前会话） ==========
-        self.conversation_history = []  # 格式: [{"role": "user", "content": "..."}, ...]
+        self.conversation_history = {}  # user_id -> list[dict]
 
         # ========== 构建 LangGraph 图 ==========
         self.graph = self._build_graph()
@@ -112,13 +114,6 @@ class LangGraphMemoryAgent:
         复用原有的指代消解上下文构建逻辑。
         返回: {"need_rewrite": True/False, "query": "改写后的完整问题"}
         """
-        # 快速检查：如果消息中明显没有指代和省略，直接返回
-        # 但为了更准确，依然交给模型判断
-        import re
-        has_abbrev = any(kw in user_message for kw in ["那个", "这款", "这个", "刚才", "上次", "之前", "它", "她", "他"])
-        if not has_abbrev:
-            # 即使没有指代词，也可能存在省略（如"那明天呢"），所以不直接返回，而是让模型判断
-            pass
         
         user_id = state.get("user_id", "default_user")
         
@@ -155,9 +150,9 @@ class LangGraphMemoryAgent:
         if recent_history:
             context_parts.append("【最近对话】\n" + "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history]))
         
-        # 如果没有任何上下文，无法改写
-        if not context_parts:
-            return {"need_rewrite": False, "query": user_message, "reason": "无上下文"}
+        # # 如果没有任何上下文，无法改写
+        # if not context_parts:
+        #     return {"need_rewrite": False, "query": user_message, "reason": "无上下文"}
         
         context = "\n\n".join(context_parts)
         # ====================================================
@@ -363,7 +358,8 @@ class LangGraphMemoryAgent:
                     break
 
         try:
-            result = self.main_adapter.chat_with_tools(messages=msgs, tools=None)
+            # result = self.main_adapter.chat_with_tools(messages=msgs, tools=None)
+            result = self.main_adapter.chat(messages=msgs)
             log_time("主模型生成回复", _start)
             return result.get("content", "啊咧？香澄还没想好怎么回答呢…让我们再试一次吧！")
         except Exception as e:
@@ -373,75 +369,102 @@ class LangGraphMemoryAgent:
     # ==================== 核心对外接口 ====================
 
     def chat(self, user_id: str, user_message: str, image: Optional[str] = None) -> str:
-        """
-        与 Agent 对话（同步接口，兼容原有代码）
-
-        Args:
-            user_id: 用户ID
-            user_message: 用户消息
-            image: 图片 Base64 数据（可选）
-
-        Returns:
-            Agent 回复文本
-        """
-        start_time = time.time()
-        log_time("开始处理消息", start_time)
-
-        # ========== 加载该用户的短期记忆（持久化的最近对话） ==========
-        # 如果当前 conversation_history 为空（首次会话或重启后），从向量库加载
-        if not self.conversation_history:
+        """主入口：处理用户消息"""
+        _start = time.time()
+        from core.config import MEMORY_CONTEXT_MAX_ROUNDS, MEMORY_DEBUG
+        
+        # === L1: 初始化/加载用户内存上下文 ===
+        if user_id not in self.conversation_history:
+            self.conversation_history[user_id] = []
+            # 从短期记忆加载最近对话
             short_term = self.memory.get_recent_conversations(user_id, n=10)
-            if short_term:
-                # 解析存储的对话内容，转换为列表格式
-                for conv in short_term:
-                    # conv 是字符串，格式为 "用户说：...\n助手回复：..."
-                    lines = conv.split('\n')
-                    if len(lines) >= 2:
-                        user_part = lines[0].replace("用户说：", "").strip()
-                        assistant_part = lines[1].replace("助手回复：", "").strip()
-                        self.conversation_history.append({"role": "user", "content": user_part})
-                        self.conversation_history.append({"role": "assistant", "content": assistant_part})
-                log_debug("短期记忆", f"加载了 {len(self.conversation_history)//2} 轮历史对话")
-            else:
-                log_debug("短期记忆", "无历史对话")
+            for conv in short_term:
+                parts = conv.split('\n')
+                if len(parts) >= 2:
+                    user_part = parts[0].replace("用户说：", "").strip()
+                    assistant_part = parts[1].replace("助手回复：", "").strip()
+                    if user_part:
+                        self.conversation_history[user_id].append({"role": "user", "content": user_part})
+                    if assistant_part:
+                        self.conversation_history[user_id].append({"role": "assistant", "content": assistant_part})
+            if MEMORY_DEBUG:
+                print(f"[Graph] 加载历史: {len(self.conversation_history[user_id])} 条消息")
 
-        # ========== 初始化 LangGraph 状态 ==========
+        # 追加当前用户消息
+        self.conversation_history[user_id].append({"role": "user", "content": user_message})
+
+        # === 初始化 LangGraph 状态 ===
         initial_state: AgentState = {
             "messages": [{"role": "user", "content": user_message}],
             "user_id": user_id,
             "iteration": 0,
             "image": image,
-            "query_type": "UNKNOWN"
+            "query_type": "UNKNOWN",
+            "rewritten_query": None,
+            "memory_context": None,
+            "short_term_ids": None,
+            "importance_score": None,
+            "search_results": None,
+            "facts": None,
         }
 
         try:
-            # ========== 执行 LangGraph 图 ==========
             final_state = self.graph.invoke(initial_state)
-
-            # 获取 query_type（从 state 中读取）
             query_type = final_state.get("query_type", "UNKNOWN")
 
-            # 提取最终回复
             messages = final_state.get("messages", [])
             if messages:
                 last = messages[-1]
                 if hasattr(last, 'content'):
                     reply = last.content
+                elif isinstance(last, dict):
+                    reply = last.get("content", "")
                 else:
-                    reply = "啊咧？香澄还没想好怎么回答呢…让我们再试一次吧！"
+                    reply = "啊咧？香澄还没想好怎么回答呢…"
             else:
-                reply = "啊咧？香澄还没想好怎么回答呢…让我们再试一次吧！"
+                reply = "啊咧？香澄还没想好怎么回答呢…"
 
-            # ========== 异步存储记忆 ==========
+            # 追加助手回复到内存上下文
+            self.conversation_history[user_id].append({"role": "assistant", "content": reply})
+
+            # === L1: 检查是否超过20轮，触发压缩 ===
+            if len(self.conversation_history[user_id]) > MEMORY_CONTEXT_MAX_ROUNDS * 2:
+                self._compress_context(user_id)
+
+            # === 异步存储记忆（L2 + L4） ===
+            importance = self.memory_manager.judge_importance(user_message, reply)
             threading.Thread(
                 target=self.memory_manager.save_memory,
-                args=(user_id, user_message, reply, query_type),
+                args=(user_id, user_message, reply, query_type, importance),
                 daemon=True
             ).start()
 
-            log_time("前台流程结束", start_time)
+            if MEMORY_DEBUG:
+                print(f"[Graph] 总耗时: {(time.time()-_start)*1000:.2f}ms")
             return reply
 
         except Exception as e:
-            log_debug("Agent", f"运行失败: {e}")
+            import traceback
+            traceback.print_exc()
             return f"❌ Agent 运行失败：{e}"
+        
+    def _compress_context(self, user_id: str):
+        """压缩 L1 内存上下文：保留最近10轮，前10轮压缩为摘要"""
+        history = self.conversation_history.get(user_id, [])
+        if len(history) <= 10:
+            return
+        
+        # 取出前10轮（按 user/assistant 成对取）
+        old_rounds = history[:10]
+        recent_rounds = history[10:]
+        
+        # 生成摘要
+        summary = self.memory_manager.compress_context(old_rounds)
+        
+        # 替换为摘要 + 最近10轮
+        self.conversation_history[user_id] = [
+            {"role": "system", "content": f"【对话摘要】{summary}"}
+        ] + recent_rounds
+        
+        if MEMORY_DEBUG:
+            print(f"[Graph] L1 压缩完成: 原 {len(history)} 条 -> {len(self.conversation_history[user_id])} 条")

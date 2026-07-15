@@ -2,17 +2,38 @@
 import json
 import ollama
 from openai import OpenAI
+import re
 
 
 # ================== LLM 适配器（仅用于工具调用模型） ==================
 class LLMAdapter:
     def chat_with_tools(self, messages, tools, **kwargs):
         raise NotImplementedError
+    
+    def chat(self, messages, **kwargs):
+        """纯文本对话（无工具调用），用于主模型"""
+        return self.chat_with_tools(messages, tools=None, **kwargs)
 
 
 class OllamaAdapter(LLMAdapter):
     def __init__(self, model: str):
         self.model = model
+
+    def chat(self, messages, **kwargs):
+        """主模型纯文本对话（无工具调用）"""
+        params = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "think": False
+        }
+        # 处理图片
+        if "images" in kwargs and kwargs["images"]:
+            params["images"] = kwargs["images"]
+        
+        response = ollama.chat(**params)
+        return {"content": response.get("message", {}).get("content", "")}
+
 
     def chat_with_tools(self, messages, tools, **kwargs):
         # 如果 tools 为空，不传 tools 参数
@@ -31,10 +52,44 @@ class OllamaAdapter(LLMAdapter):
             params["images"] = kwargs["images"]
         response = ollama.chat(**params)
         msg = response.get("message", {})
+        content = msg.get("content", "")
+        tool_calls = msg.get("tool_calls", [])
+        
+        # ========== MiniCPM-V 4.6 特殊处理：从 content 里解析 tool_call ==========
+        # 如果模型没有返回标准的 tool_calls，但 content 里包含 <tool_call> 标签，手动解析
+        if not tool_calls and "<tool_call>" in content:
+            parsed = self._parse_minicpm_tool_calls(content)
+            if parsed:
+                tool_calls = parsed
+                # 移除 content 里的 tool_call 块，只保留自然语言部分
+                content = re.sub(r'\s*<tool_call>.*?</tool_call>', '', content, flags=re.DOTALL).strip()
+        
         return {
-            "content": msg.get("content", ""),
-            "tool_calls": msg.get("tool_calls", [])
+            "content": content,
+            "tool_calls": tool_calls
         }
+    
+    def _parse_minicpm_tool_calls(self, content: str) -> list:
+        """解析 MiniCPM-V 4.6 的 <tool_call> 格式"""
+        pattern = r'<tool_call>\s*<function=(.*?)>\s*(?:<parameter=(.*?)>(.*?)</parameter>)?\s*</tool_call>'
+        matches = re.findall(pattern, content, re.DOTALL)
+        if not matches:
+            return []
+        
+        tool_calls = []
+        for match in matches:
+            func_name = match[0].strip()
+            if len(match) >= 3 and match[1]:
+                args = {match[1].strip(): match[2].strip()}
+            else:
+                args = {}
+            tool_calls.append({
+                "function": {
+                    "name": func_name,
+                    "arguments": args
+                }
+            })
+        return tool_calls
 
 
 class DeepSeekAdapter(LLMAdapter):
