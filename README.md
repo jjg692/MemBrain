@@ -128,18 +128,9 @@ cd MemBrain
 python web_app.py
 
 ## 📦 用了啥
-技术	说明
-Python 3.11	主要开发语言
-FastAPI	Web 框架
-WebSocket	实时双向通信
-LangGraph	Agent 编排框架
-ChromaDB	向量数据库（记忆系统）
-Ollama	本地 LLM 运行时
-GPT-SoVITS	TTS 语音合成
-百度搜索 API	联网搜索
-Sentence Transformers	文本嵌入
+Python / FastAPI / LangGraph / ChromaDB / Edge-TTS / Ollama / Qwen / Sentence-Transformers
 
 ## 🤔 为什么叫 MemBrain
-Memory + Brain，一个缝合怪名字，但比「AI_Chat_Project_v8_final」好听点。
+Memory + Brain，无论怎样要比「AI_Chat_Project_v8_final」好听点。
 
 > “呐呐！一起闪闪发光吧！キラキラ☆ドキドキ！”
