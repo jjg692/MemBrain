@@ -5,7 +5,6 @@ Handlers 模块
 """
 from .personal import handle_personal
 from .realtime import force_search
-from .hybrid import handle_hybrid
 from .result import handle_result_node
 
 __all__ = [

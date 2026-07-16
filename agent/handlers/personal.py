@@ -31,6 +31,13 @@ def handle_personal(self, user_message: str, state: dict) -> dict:
     memory_context = retrieval_result.get("context", "")
     
     log_debug("PERSONAL", f"检索到: {len(fact_texts)} 条事实, {len(short_term_texts)} 条短期记忆")
+    # ===== 新增详细打印 =====
+    log_debug("PERSONAL", "事实详情:")
+    for fact in fact_texts:
+        log_debug("PERSONAL", f"  - {fact}")
+    log_debug("PERSONAL", "短期记忆详情:")
+    for mem in short_term_texts:
+        log_debug("PERSONAL", f"  - {mem}")
 
     # ========== 构建 System Prompt（事实优先） ==========
     full_system_prompt = f"""{self.system_prompt}

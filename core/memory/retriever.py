@@ -70,6 +70,7 @@ class HybridRetriever:
         return [w.lower() for w in text.split() if len(w) > 0]
 
     def search(self, query: str, user_id: str, top_k: int = 5) -> List[Dict]:
+        print(f"[DEBUG] retriever.search 被调用，query={query}")
         """
         三阶段检索：
         1. 向量检索（语义）

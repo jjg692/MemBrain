@@ -133,7 +133,9 @@ class MemoryManager:
         
         try:
             result = self.tool_adapter.chat_with_tools(
-                messages=[{"role": "system", "content": prompt}],
+                messages = [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": "请根据上述标准输出一个数字分数。"}],
                 tools=None
             )
             content = result.get("content", "").strip()
@@ -165,7 +167,10 @@ class MemoryManager:
             
             prompt = f"请用一句话总结以下对话的核心内容：\n{text}"
             result = self.tool_adapter.chat_with_tools(
-                messages=[{"role": "system", "content": prompt}],
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": text}
+                ],
                 tools=None
             )
             summary = result.get("content", "").strip()
@@ -179,6 +184,7 @@ class MemoryManager:
 
     # ==================== L2 + L4 综合检索 ====================
     def retrieve_memory_context(self, user_id: str, query: str, top_k: int = 5) -> Dict:
+        print(f"[DEBUG] retrieve_memory_context 被调用，query={query}, user_id={user_id}")
         """
         综合检索（L4 事实 + L2 短期记忆）
         返回: {"facts": [...], "short_term": [...], "context": "合并后的文本"}

@@ -59,14 +59,20 @@ def handle_result_node(self, state: dict) -> dict:
     """
 
     chat_messages = [{"role": "system", "content": full_system_prompt}]
-    for msg in self.conversation_history[-10:]:
+    history = self.conversation_history.get(user_id, [])
+    for msg in history[-10:]:
         chat_messages.append({"role": msg["role"], "content": msg["content"]})
     chat_messages.append({"role": "user", "content": user_message})
 
     final_reply = self._generate_with_main_model(chat_messages, image)
 
-    self.conversation_history.append({"role": "user", "content": user_message})
-    self.conversation_history.append({"role": "assistant", "content": final_reply})
+    # 先确保该用户有历史记录
+    if user_id not in self.conversation_history:
+        self.conversation_history[user_id] = []
+
+    # 再追加
+    self.conversation_history[user_id].append({"role": "user", "content": user_message})
+    self.conversation_history[user_id].append({"role": "assistant", "content": final_reply})
 
     log_time("RESULT 处理完成", _start)
     return {

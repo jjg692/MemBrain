@@ -17,6 +17,7 @@ from core.memory import MemoryManager
 from agent.router import classify_query
 from agent.handlers import handle_personal, force_search, handle_result_node
 from core.logger import log_time, log_debug, log_router
+from core.config import MEMORY_CONTEXT_MAX_ROUNDS, MEMORY_DEBUG
 
 
 class LangGraphMemoryAgent:
@@ -139,7 +140,7 @@ class LangGraphMemoryAgent:
         long_term_texts = [item["document"] for item in long_term_results.get("results", [])]
         
         # 3. 从对话历史（内存）获取最近上下文
-        recent_history = self.conversation_history[-5:] if self.conversation_history else []
+        recent_history = self.conversation_history.get(user_id, [])[-5:]
         
         # 4. 构建上下文
         context_parts = []
@@ -185,15 +186,18 @@ class LangGraphMemoryAgent:
 
         【输出格式】
         根据情况输出对应 JSON：
-        - 成功改写：{"status": "success", "rewritten": "改写后的问题", "entity": "实体名"}
-        - 多个候选：{"status": "multiple", "candidates": ["候选1", "候选2"], "rewritten": "原问题"}
-        - 无指代或改写失败：{"status": "failed", "rewritten": "原问题"}
+        - 成功改写：{{"status": "success", "rewritten": "改写后的问题", "entity": "实体名"}}
+        - 多个候选：{{"status": "multiple", "candidates": ["候选1", "候选2"], "rewritten": "原问题"}}
+        - 无指代或改写失败：{{"status": "failed", "rewritten": "原问题"}}
 
         只输出 JSON，不要输出其他内容。
         """
         try:
             result = self.tool_adapter.chat_with_tools(
-                messages=[{"role": "system", "content": rewrite_prompt}],
+                messages=[
+                    {"role": "system", "content": rewrite_prompt},
+                    {"role": "user", "content": f"请改写这个查询：{user_message}"}  # ← 新增
+                ],
                 tools=None
             )
             import json, re
@@ -254,12 +258,18 @@ class LangGraphMemoryAgent:
             列出所有候选实体，让用户从中选择。
             """
             ask_result = self.tool_adapter.chat_with_tools(
-                messages=[{"role": "system", "content": ask_prompt}],
+                 messages=[
+                    {"role": "system", "content": ask_prompt},
+                    {"role": "user", "content": f"用户说的'那个'可能指代以下实体：{', '.join(candidates)}，请生成询问回复。"}
+                ],
                 tools=None
             )
             reply = ask_result.get("content", f"呐呐～你说的'那个'是指 {', '.join(candidates)} 中的哪一个呢？")
-            self.conversation_history.append({"role": "user", "content": user_message})
-            self.conversation_history.append({"role": "assistant", "content": reply})
+            user_id = state.get("user_id", "default_user")
+            if user_id not in self.conversation_history:
+                self.conversation_history[user_id] = []
+            self.conversation_history[user_id].append({"role": "user", "content": user_message})
+            self.conversation_history[user_id].append({"role": "assistant", "content": reply})
             # 直接返回询问，不继续路由
             return {
                 "messages": [{"role": "assistant", "content": reply}],
@@ -282,7 +292,7 @@ class LangGraphMemoryAgent:
             return result
 
         # ========== 路由分类 ==========
-        query_type = classify_query(self, user_message)
+        query_type = classify_query(self, user_message, rewrite_context=rewrite_result)
         log_router(f"问题类型: {query_type}")
 
         # ========== 分流处理 ==========
@@ -371,7 +381,6 @@ class LangGraphMemoryAgent:
     def chat(self, user_id: str, user_message: str, image: Optional[str] = None) -> str:
         """主入口：处理用户消息"""
         _start = time.time()
-        from core.config import MEMORY_CONTEXT_MAX_ROUNDS, MEMORY_DEBUG
         
         # === L1: 初始化/加载用户内存上下文 ===
         if user_id not in self.conversation_history:
