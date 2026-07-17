@@ -182,13 +182,20 @@ class MemoryManager:
             log_dbg(f"压缩失败: {e}")
             return text[:50] + "..." if text else ""
 
-    # ==================== L2 + L4 综合检索 ====================
-    def retrieve_memory_context(self, user_id: str, query: str, top_k: int = 5) -> Dict:
+    # ==================== L2 + L4 + L5综合检索 ====================
+    def retrieve_memory_context(self, user_id: str, query: str, top_k: int = 5, role_id: Optional[str] = None) -> Dict:
         print(f"[DEBUG] retrieve_memory_context 被调用，query={query}, user_id={user_id}")
         """
-        综合检索（L4 事实 + L2 短期记忆）
+        综合检索（L5 角色事实 + L4 事实 + L2 短期记忆）
         返回: {"facts": [...], "short_term": [...], "context": "合并后的文本"}
         """
+        # === L5: 角色事实（优先级最高） ===
+        role_fact_texts = []
+        if role_id:
+            role_facts = self.memory.get_role_facts(role_id)
+            role_fact_texts = role_facts
+            log_dbg(f"L5 角色事实: {len(role_fact_texts)} 条")
+
         # === L4: 先拉取事实（精确匹配，优先级高） ===
         fact_items = self.memory.get_facts(user_id, n=3)
         fact_texts = [f["document"] for f in fact_items]
@@ -209,6 +216,7 @@ class MemoryManager:
         return {
             "facts": fact_texts,
             "short_term": short_term_texts,
+            "role_facts": role_fact_texts,
             "context": context,
             "raw": short_term_results
         }

@@ -66,14 +66,6 @@ def handle_result_node(self, state: dict) -> dict:
 
     final_reply = self._generate_with_main_model(chat_messages, image)
 
-    # 先确保该用户有历史记录
-    if user_id not in self.conversation_history:
-        self.conversation_history[user_id] = []
-
-    # 再追加
-    self.conversation_history[user_id].append({"role": "user", "content": user_message})
-    self.conversation_history[user_id].append({"role": "assistant", "content": final_reply})
-
     log_time("RESULT 处理完成", _start)
     return {
         "messages": [{"role": "assistant", "content": final_reply}],

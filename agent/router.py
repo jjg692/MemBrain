@@ -2,13 +2,35 @@
 from typing import Dict, Optional
 from core.config import MEMORY_DEBUG
 
-def classify_query(self, user_message: str, rewrite_context: Optional[Dict] = None) -> str:
+def classify_query(self, user_message: str, rewrite_context: Optional[Dict] = None,  role_context: Optional[str] = None) -> str:
     # ========== 第一步：用户主动开关（最高优先级） ==========
     # 如果用户明确说“需要联网”，直接走搜索
-    if "需要联网" in user_message:
+    if "需要联网" in user_message or "联网搜索" in user_message:
         if MEMORY_DEBUG:
             print(f"[Router] 用户主动要求联网 -> REALTIME")
         return "REALTIME"
+
+    # === 如果改写成功，基于改写结果判断 ===
+    if rewrite_context:
+        status = rewrite_context.get("status")
+        rewritten = rewrite_context.get("query", "")
+        entity = rewrite_context.get("entity", "")
+
+        if status == "success" and rewritten:
+            # 改写后的内容有强实时关键词 → 直接 REALTIME
+            strong_realtime = ["天气", "新闻", "汇率", "股价", "股票", "油价"]
+            for kw in strong_realtime:
+                if kw in rewritten:
+                    return "REALTIME"
+            
+            # 改写成功且明确指出实体 → 说明已经消歧了，走 PERSONAL
+            # （因为如果是需要联网的实体，上面已经匹配到了）
+            if entity:
+                return "PERSONAL"
+
+        elif status == "multiple":
+            # 多候选 → 需要用户确认，走 PERSONAL
+            return "PERSONAL"
 
     # ========== 第二步：关键词快速匹配 ==========
     # 强实时关键词（必走搜索）
@@ -27,6 +49,8 @@ def classify_query(self, user_message: str, rewrite_context: Optional[Dict] = No
     if has_weak or len(user_message) < 10:
         router_prompt = f"""
         判断用户问题是否需要联网搜索才能回答。
+        
+        {"【当前角色信息】" + role_context if role_context else ""}
 
         【规则】
         1. 需要联网（输出 REALTIME）：天气、新闻、实时数据、最新动态、推荐、查询具体信息、当前位置相关

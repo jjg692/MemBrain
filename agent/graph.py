@@ -71,7 +71,21 @@ class LangGraphMemoryAgent:
         self._fact_extractor_loaded = True  # 占位，实际用 memory_manager 处理
 
         # ========== 短期对话历史（当前会话） ==========
-        self.conversation_history = {}  # user_id -> list[dict]
+        self.conversation_history = {}  
+
+
+        # ========== 初始化 L5 角色事实 ==========
+        if self.system_prompt:
+            try:
+                from core.role.loader import init_role_to_memory
+                init_role_to_memory(
+                    role_prompt=self.system_prompt,
+                    role_id="kasumi",
+                    tool_adapter=self.tool_adapter,
+                    memory=self.memory
+                )
+            except Exception as e:
+                print(f"[Graph] L5 初始化失败: {e}")
 
         # ========== 构建 LangGraph 图 ==========
         self.graph = self._build_graph()
@@ -182,7 +196,6 @@ class LangGraphMemoryAgent:
         - 如用户没说"好看吗"，就不要加"好看吗"。
         - 如用户没说"怎么样"，就不要加"怎么样"。
         6. 如果原问题已经很完整，直接输出原问题。
-        7. 输出格式为 JSON：{{"rewritten": "改写后的问题", "changed": true/false, "reason": "改动原因"}}
 
         【输出格式】
         根据情况输出对应 JSON：
@@ -292,7 +305,17 @@ class LangGraphMemoryAgent:
             return result
 
         # ========== 路由分类 ==========
-        query_type = classify_query(self, user_message, rewrite_context=rewrite_result)
+        # 给 router 带上角色别名信息
+        role_alias_hint = ""
+        try:
+            role_facts = self.memory.get_role_facts("kasumi")
+            identity_fact = next((f for f in role_facts if "别号" in f or "别称" in f), role_facts[0] if role_facts else "")
+            if identity_fact:
+                role_alias_hint = f"当前角色名称：户山香澄。{identity_fact}"
+        except Exception as e:
+            role_alias_hint = ""
+
+        query_type = classify_query(self, user_message, rewrite_context=rewrite_result, role_context=role_alias_hint)
         log_router(f"问题类型: {query_type}")
 
         # ========== 分流处理 ==========
@@ -304,7 +327,7 @@ class LangGraphMemoryAgent:
 
         elif query_type == "PERSONAL":
             log_router("个人闲聊，只走记忆")
-            result = handle_personal(self, user_message, state)
+            result = handle_personal(self, user_message, state, role_id="kasumi")
             result["query_type"] = "PERSONAL"
             return result
 

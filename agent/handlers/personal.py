@@ -7,9 +7,11 @@ import time
 from datetime import datetime
 from core.logger import log_time, log_debug, log_router
 from core.config import MEMORY_DEBUG
+from typing import Optional
+from agent.handlers.realtime import force_search
 
 
-def handle_personal(self, user_message: str, state: dict) -> dict:
+def handle_personal(self, user_message: str, state: dict, role_id: Optional[str] = None) -> dict:
     """PERSONAL 分支：记忆检索 + 主模型生成"""
     _start = time.time()
     log_debug("PERSONAL", f"开始处理: {user_message[:30]}...")
@@ -19,11 +21,12 @@ def handle_personal(self, user_message: str, state: dict) -> dict:
     iteration = state.get("iteration", 0)
     current_date = datetime.now().strftime("%Y年%m月%d日")
 
-    # ========== 综合检索（L4事实 + L2短期记忆） ==========
+    # ========== 综合检索（L5 角色事实 + L4 事实 + L2 短期记忆） ==========
     retrieval_result = self.memory_manager.retrieve_memory_context(
         user_id=user_id,
         query=user_message,
-        top_k=5
+        top_k=5,
+        role_id=role_id
     )
     
     fact_texts = retrieval_result.get("facts", [])
@@ -49,6 +52,11 @@ def handle_personal(self, user_message: str, state: dict) -> dict:
     # 事实部分（L4）
     if fact_texts:
         full_system_prompt += "【关于你的事实】\n" + "\n".join(f"- {f}" for f in fact_texts) + "\n\n"
+
+    # 新增：L5 角色事实
+    role_facts = retrieval_result.get("role_facts", [])
+    if role_facts:
+        full_system_prompt += "【关于我】\n" + "\n".join(f"- {f}" for f in role_facts) + "\n\n"
     
     # 短期记忆部分（L2）
     if short_term_texts:
@@ -70,14 +78,21 @@ def handle_personal(self, user_message: str, state: dict) -> dict:
     
     chat_messages.append({"role": "user", "content": user_message})
 
+    # ========== 4. 调用主模型生成回复（带“不确定”检测） ==========
+    # 这里在 system prompt 里多加一句指令，让 LLM 在不确定时输出标记
+    chat_messages[0]["content"] += "\n\n【重要指令】如果你不确定答案，请在回复中包含「@@@UNCERTAIN@@@」。"
+
     # ========== 主模型生成回复 ==========
     final_reply = self._generate_with_main_model(chat_messages, image)
 
-    # ========== 更新内存上下文 ==========
-    if user_id not in self.conversation_history:
-        self.conversation_history[user_id] = []
-    self.conversation_history[user_id].append({"role": "user", "content": user_message})
-    self.conversation_history[user_id].append({"role": "assistant", "content": final_reply})
+    # ========== 5. 检测 LLM 是否不确定 ==========
+    if "@@@UNCERTAIN@@@" in final_reply:
+        # 移除标记
+        final_reply = final_reply.replace("@@@UNCERTAIN@@@", "").strip()
+        log_router("PERSONAL 分支：LLM 表示不确定，走搜索兜底")
+        # 触发搜索
+        return force_search(self, user_message, state)
+    
 
     log_time("PERSONAL 处理完成", _start)
     return {

@@ -212,3 +212,12 @@ class SimpleMemory:
         if ids:
             self.collection.delete(ids=ids)
             log_dbg(f"删除 {len(ids)} 条")
+
+    
+    # ==================== L5: 角色事实 ====================
+    def get_role_facts(self, role_id: str) -> List[str]:
+        """获取角色事实（type=role_fact）"""
+        results = self.collection.get(
+            where={"$and": [{"role_id": role_id}, {"type": "role_fact"}]}
+        )
+        return results["documents"] if results and results["documents"] else []
