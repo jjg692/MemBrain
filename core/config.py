@@ -32,4 +32,25 @@ MEMORY_SHORT_TERM_MAX_ROUNDS = 50
 MEMORY_IMPORTANCE_THRESHOLD = 0.35
 
 # 调试开关
+# ==================== 记忆系统配置 ====================
+# L1: 内存上下文最大轮数（每轮=一问一答）
+MEMORY_CONTEXT_MAX_ROUNDS = 20
+
+# L2: 短期记忆保留最大轮数（向量库）
+MEMORY_SHORT_TERM_MAX_ROUNDS = 50
+
+# L4: 重要性阈值，高于此值才抽取事实
+MEMORY_IMPORTANCE_THRESHOLD = 0.35
+
+# ==================== 时间衰减 & 模糊化 ====================
+# 半衰期（天）：超过此天数的记忆，衰减因子降至 0.5
+MEMORY_HALF_LIFE_DAYS = 7
+
+# 模糊化阈值（天）：超过此天数未被访问的记忆，触发模糊化
+MEMORY_FUZZY_DAYS = 14
+
+# 模糊化后保留的摘要长度（字符数）
+MEMORY_FUZZY_SUMMARY_LENGTH = 50
+
+# 调试开关
 MEMORY_DEBUG = True

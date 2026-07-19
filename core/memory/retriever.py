@@ -39,12 +39,14 @@ class HybridRetriever:
                 log_dbg(f"Cross-Encoder 加载失败: {e}")
                 self._cross_encoder = None
 
-    def _rebuild_bm25_index(self, user_id: str):
-        """重建 BM25 索引（按用户隔离）"""
+    def _rebuild_bm25_index(self, user_id: str, role_id: Optional[str] = None):
+        """重建 BM25 索引（按用户+角色隔离）"""
         _start = time.time()
-        """重建 BM25 索引（只索引短期记忆，不包括事实）"""
+        filter_parts = [{"user_id": user_id}, {"type": "short_term"}]
+        if role_id:
+            filter_parts.append({"role_id": role_id})
         all_docs = self.memory.collection.get(
-            where={"$and": [{"user_id": user_id}, {"type": "short_term"}]}
+            where={"$and": filter_parts} if len(filter_parts) > 1 else filter_parts[0]
         )
         if all_docs and all_docs["documents"]:
             self._corpus = all_docs["documents"]
@@ -69,28 +71,30 @@ class HybridRetriever:
         text = re.sub(r'[^\w\u4e00-\u9fff]', ' ', text)
         return [w.lower() for w in text.split() if len(w) > 0]
 
-    def search(self, query: str, user_id: str, top_k: int = 5) -> List[Dict]:
-        print(f"[DEBUG] retriever.search 被调用，query={query}")
+    def search(self, query: str, user_id: str, role_id: Optional[str] = None, top_k: int = 5) -> List[Dict]:
         """
         三阶段检索：
         1. 向量检索（语义）
         2. BM25 检索（关键词）
         3. Cross-Encoder 精排
+        所有检索按 role_id 隔离
         """
         _start = time.time()
-        log_dbg(f"检索开始: '{query[:30]}...'")
+        log_dbg(f"检索开始: '{query[:30]}...' role_id={role_id}")
 
         # === 检查是否需要重建 BM25 索引 ===
-        if self._user_id_cache != user_id:
-            self._rebuild_bm25_index(user_id)
-            self._user_id_cache = user_id
+        cache_key = f"{user_id}_{role_id}" if role_id else user_id
+        if self._user_id_cache != cache_key:
+            self._rebuild_bm25_index(user_id, role_id)
+            self._user_id_cache = cache_key
 
         # === 阶段1: 向量检索 ===
         vec_results = self.memory.search(
             query=query,
             user_id=user_id,
-            threshold=0.3,  # 阈值放低，召回更多
-            n_results=top_k * 4
+            role_id=role_id,
+            threshold=0.5,  # 阈值放低，召回更多
+            n_results=top_k * 3
         ).get("results", [])
 
         # === 阶段2: BM25 关键词检索 ===
@@ -151,5 +155,12 @@ class HybridRetriever:
             pass
 
         results = candidates[:top_k]
+
+        # === 阶段4: 时间衰减 ===
+        try:
+            results = self.memory.apply_time_decay(results)
+        except Exception as e:
+            log_dbg(f"时间衰减失败（降级）: {e}")
+
         log_dbg(f"检索完成: 返回 {len(results)} 条，耗时: {(time.time()-_start)*1000:.2f}ms")
         return results

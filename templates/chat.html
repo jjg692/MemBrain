@@ -3,785 +3,720 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Agent 聊天</title>
+    <title>MemBrain 聊天</title>
     <style>
-        /* ==================== 全局重置 ==================== */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: #0f0f1a;
             color: #e0e0e0;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
+            height: 100vh; display: flex; flex-direction: column;
         }
-
-        /* ==================== 顶部栏 ==================== */
+        /* 顶部栏 */
         .header {
             background: linear-gradient(135deg, #1a1a2e, #16213e);
-            padding: 16px 24px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            border-bottom: 1px solid #2a2a4a;
-            flex-shrink: 0;
+            padding: 10px 20px;
+            display: flex; align-items: center; justify-content: space-between;
+            border-bottom: 1px solid #2a2a4a; flex-shrink: 0; flex-wrap: wrap; gap: 8px;
         }
-
-        .header-left {
-            display: flex;
-            align-items: center;
-            gap: 12px;
+        .header-left { display: flex; align-items: center; gap: 10px; }
+        .header .logo { font-size: 20px; font-weight: 700; background: linear-gradient(90deg, #00d2ff, #3a7bd5); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        .header .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; display: inline-block; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+        .header .status-text { font-size: 12px; color: #888; }
+        .header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .header-right label { font-size: 12px; color: #888; }
+        .header-right input,.header-right select {
+            background: #1e1e3a; border: 1px solid #3a3a5a; border-radius: 6px;
+            padding: 4px 10px; color: #e0e0e0; font-size: 12px; outline: none;
         }
-
-        .header .logo {
-            font-size: 22px;
-            font-weight: 700;
-            background: linear-gradient(90deg, #00d2ff, #3a7bd5);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+        .header-right select { cursor: pointer; }
+        .header-right input:focus,.header-right select:focus { border-color: #3a7bd5; }
+        .header-right button {
+            background: transparent; border: 1px solid #3a7bd5; border-radius: 6px;
+            padding: 4px 10px; color: #3a7bd5; cursor: pointer; font-size: 12px;
         }
+        .header-right button:hover { background: rgba(58,123,213,.15); }
 
-        .header .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #4ade80;
-            display: inline-block;
-            animation: pulse 2s infinite;
+        /* 房间选择器 */
+        .room-bar {
+            display: none; padding: 8px 20px; background: #14142a;
+            border-bottom: 1px solid #2a2a4a; flex-shrink: 0; align-items: center; gap: 10px; flex-wrap: wrap;
         }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
+        .room-bar.show { display: flex; }
+        .room-bar .room-label { font-size: 13px; color: #00d2ff; font-weight: 600; }
+        .room-bar input,.room-bar select {
+            background: #1e1e3a; border: 1px solid #3a3a5a; border-radius: 6px;
+            padding: 4px 10px; color: #e0e0e0; font-size: 12px; outline: none;
         }
-
-        .header .status-text {
-            font-size: 13px;
-            color: #888;
+        .room-bar button {
+            background: #3a7bd5; border: none; border-radius: 6px; padding: 4px 12px;
+            color: #fff; cursor: pointer; font-size: 12px;
         }
+        .room-bar button:hover { background: #2a6bc5; }
+        .room-bar .agent-list { font-size: 12px; color: #888; margin-left: 4px; }
 
-        .header-right {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .header-right label {
-            font-size: 13px;
-            color: #888;
-        }
-
-        .header-right input {
-            background: #1e1e3a;
-            border: 1px solid #3a3a5a;
-            border-radius: 8px;
-            padding: 6px 12px;
-            color: #e0e0e0;
-            font-size: 13px;
-            outline: none;
-            transition: border 0.2s;
-        }
-
-        .header-right input:focus {
-            border-color: #3a7bd5;
-        }
-
-        /* ==================== 聊天主体 ==================== */
+        /* 聊天 */
         .chat-container {
-            flex: 1;
-            overflow-y: auto;
-            padding: 24px 16px;
+            flex: 1; overflow-y: auto; padding: 16px 16px; display: flex;
+            flex-direction: column; gap: 12px; scroll-behavior: smooth;
+        }
+        .chat-container::-webkit-scrollbar { width: 5px; }
+        .chat-container::-webkit-scrollbar-track { background: transparent; }
+        .chat-container::-webkit-scrollbar-thumb { background: #3a3a5a; border-radius: 3px; }
+
+        /* ===== 消息行：头像 + 气泡横向排列 ===== */
+        .message-row {
             display: flex;
-            flex-direction: column;
-            gap: 16px;
-            scroll-behavior: smooth;
+            align-items: flex-start;
+            gap: 10px;
+            max-width: 85%;
+            animation: fadeIn .3s ease;
         }
-
-        .chat-container::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        .chat-container::-webkit-scrollbar-track {
-            background: transparent;
-        }
-
-        .chat-container::-webkit-scrollbar-thumb {
-            background: #3a3a5a;
-            border-radius: 3px;
-        }
-
-        /* ==================== 消息气泡 ==================== */
-        .message {
-            max-width: 75%;
-            padding: 12px 16px;
-            border-radius: 16px;
-            line-height: 1.6;
-            font-size: 14px;
-            animation: fadeIn 0.3s ease;
-            word-break: break-word;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(8px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .message.user {
+        .message-row.right {
             align-self: flex-end;
-            background: linear-gradient(135deg, #3a7bd5, #00d2ff);
-            color: #fff;
-            border-bottom-right-radius: 4px;
+            flex-direction: row-reverse;
         }
-
-        .message.assistant {
+        .message-row.left {
             align-self: flex-start;
-            background: #1e1e3a;
-            border: 1px solid #2a2a4a;
-            border-bottom-left-radius: 4px;
         }
+        @keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
 
-        .message .msg-label {
-            font-size: 11px;
-            font-weight: 600;
-            margin-bottom: 4px;
-            opacity: 0.7;
+        /* 头像 */
+        .avatar {
+            width: 36px; height: 36px; border-radius: 50%;
+            flex-shrink: 0; object-fit: cover;
+            background: #2a2a4a;
+            border: 2px solid transparent;
         }
+        .avatar.user-avatar { border-color: #3a7bd5; }
+        .avatar.agent-avatar { border-color: #00d2ff; }
 
-        .message .msg-time {
-            font-size: 11px;
-            opacity: 0.4;
-            margin-top: 4px;
-            text-align: right;
+        /* 消息气泡 */
+        .message {
+            padding: 10px 14px; border-radius: 14px;
+            line-height: 1.5; font-size: 14px; word-break: break-word;
+            min-width: 60px;
         }
+        .message-row.right .message {
+            background: linear-gradient(135deg,#3a7bd5,#00d2ff);
+            color: #fff; border-bottom-right-radius: 4px;
+        }
+        .message-row.left .message {
+            background: #1e1e3a; border: 1px solid #2a2a4a; border-bottom-left-radius: 4px;
+        }
+        .message .msg-label { font-size: 11px; font-weight: 600; margin-bottom: 3px; opacity: .7; }
+        .message .msg-time { font-size: 10px; opacity: .4; margin-top: 3px; text-align: right; }
+        .message-row.left .message .msg-label { color: #00d2ff; }
+        .message-row.right .message .msg-label { color: rgba(255,255,255,.8); }
+        .message .msg-image { max-width: 180px; max-height: 180px; border-radius: 6px; margin-top: 6px; display: block; object-fit: contain; background: #1a1a2e; }
 
-        .message.assistant .msg-label {
-            color: #00d2ff;
+        /* 系统/错误消息保持居中 */
+        .message.system-row, .message.error-row {
+            align-self: center; text-align: center;
+            padding: 10px 14px; border-radius: 8px; font-size: 13px; max-width: 90%;
+            display: flex; align-items: center; gap: 6px; justify-content: center;
         }
-        .message.user .msg-label {
-            color: rgba(255,255,255,0.8);
-        }
+        .message.error-row { background: rgba(239,68,68,.15); border:1px solid rgba(239,68,68,.3); color:#f87171; }
+        .message.system-row { background: rgba(74,222,128,.1); border:1px solid rgba(74,222,128,.2); color:#4ade80; }
 
-        /* ---------- 消息中的图片 ---------- */
-        .message .msg-image {
-            max-width: 200px;
-            max-height: 200px;
-            border-radius: 8px;
-            margin-top: 8px;
-            display: block;
-            object-fit: contain;
-            background: #1a1a2e;
-        }
-
-        /* ==================== 正在输入指示器 ==================== */
+        /* 正在输入 */
         .typing-indicator {
-            align-self: flex-start;
-            background: #1e1e3a;
-            border: 1px solid #2a2a4a;
-            border-radius: 16px;
-            border-bottom-left-radius: 4px;
-            padding: 12px 20px;
-            display: none;
-            align-items: center;
-            gap: 4px;
+            align-self: flex-start; background: #1e1e3a; border: 1px solid #2a2a4a;
+            border-radius: 14px; border-bottom-left-radius: 4px; padding: 10px 16px;
+            display: none; align-items: center; gap: 4px;
         }
-
         .typing-indicator span {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #3a7bd5;
+            width: 7px; height: 7px; border-radius: 50%; background: #3a7bd5;
             animation: typing 1.4s infinite ease-in-out;
         }
+        .typing-indicator span:nth-child(2) { animation-delay: .2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: .4s; }
+        @keyframes typing { 0%,80%,100%{transform:scale(.6);opacity:.4} 40%{transform:scale(1);opacity:1} }
+        .typing-indicator.show { display: flex; }
 
-        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+        /* 输入区 */
+        .input-area { flex-shrink: 0; padding: 12px 20px; background: #1a1a2e; border-top: 1px solid #2a2a4a; display: flex; flex-direction: column; gap: 6px; }
+        .tts-toggle-row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 2px 0; border-bottom: 1px solid #2a2a4a; margin-bottom: 4px; }
+        .tts-toggle-row span { font-size: 12px; color: #888; user-select: none; }
+        .tts-switch { position: relative; display: inline-block; width: 42px; height: 22px; flex-shrink: 0; }
+        .tts-switch input { opacity:0; width:0; height:0; }
+        .tts-slider { position: absolute; cursor: pointer; top:0; left:0; right:0; bottom:0; background: #3a3a5a; transition: .3s; border-radius: 22px; }
+        .tts-slider:before { content:""; position: absolute; height:16px; width:16px; left:3px; bottom:3px; background: #e0e0e0; transition: .3s; border-radius: 50%; }
+        .tts-switch input:checked + .tts-slider { background: linear-gradient(135deg,#3a7bd5,#00d2ff); }
+        .tts-switch input:checked + .tts-slider:before { transform: translateX(20px); }
+        .input-row { display: flex; gap: 8px; }
+        .input-area input[type="text"] { flex:1; background: #1e1e3a; border:1px solid #3a3a5a; border-radius:10px; padding: 10px 14px; color: #e0e0e0; font-size: 14px; outline: none; }
+        .input-area input[type="text"]:focus { border-color: #3a7bd5; }
+        .input-area button { background: linear-gradient(135deg,#3a7bd5,#00d2ff); border: none; border-radius: 10px; padding: 10px 18px; color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; transition: transform .2s,box-shadow .2s; white-space: nowrap; }
+        .input-area button:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(58,123,213,.4); }
+        .input-area button:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+        .input-area .btn-image { background: #2a2a4a; border:1px solid #3a3a5a; padding: 10px 14px; font-size: 16px; border-radius: 10px; cursor: pointer; color: #e0e0e0; }
+        .input-area .btn-image:hover { background: #3a3a5a; }
+        .image-preview { display: none; align-items: center; gap: 8px; padding: 6px 10px; background: #1e1e3a; border-radius: 8px; border:1px solid #3a3a5a; }
+        .image-preview.show { display: flex; }
+        .image-preview img { max-height: 50px; max-width: 50px; border-radius: 4px; object-fit: cover; }
+        .image-preview .file-name { font-size: 12px; color: #aaa; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .image-preview .btn-remove { background: none; border: none; color: #f87171; cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; }
+        .image-preview .btn-remove:hover { background: rgba(239,68,68,.2); }
 
-        @keyframes typing {
-            0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-            40% { transform: scale(1); opacity: 1; }
-        }
-
-        .typing-indicator.show {
-            display: flex;
-        }
-
-        /* ==================== 输入区 ==================== */
-
-        /* ========== 语音合成开关 ========== */
-        .tts-toggle-row {
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            gap: 12px;
-            padding: 4px 0;
-            border-bottom: 1px solid #2a2a4a;
-            margin-bottom: 8px;
-        }
-
-        .tts-toggle-row span {
-            font-size: 13px;
-            color: #888;
-            user-select: none;
-        }
-
-        /* 修正：使用 .tts-switch 类，与 CSS 一致 */
-        .tts-switch {
-            position: relative;
-            display: inline-block;
-            width: 48px;
-            height: 26px;
-            flex-shrink: 0;
-        }
-
-        .tts-switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-
-        .tts-slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #3a3a5a;
-            transition: .3s;
-            border-radius: 26px;
-        }
-
-        .tts-slider:before {
-            position: absolute;
-            content: "";
-            height: 20px;
-            width: 20px;
-            left: 3px;
-            bottom: 3px;
-            background-color: #e0e0e0;
-            transition: .3s;
-            border-radius: 50%;
-        }
-
-        .tts-switch input:checked + .tts-slider {
-            background: linear-gradient(135deg, #3a7bd5, #00d2ff);
-        }
-
-        .tts-switch input:checked + .tts-slider:before {
-            transform: translateX(22px);
-        }
-
-        .input-area {
-            flex-shrink: 0;
-            padding: 16px 24px;
-            background: #1a1a2e;
-            border-top: 1px solid #2a2a4a;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .input-row {
-            display: flex;
-            gap: 12px;
-        }
-
-        .input-area input[type="text"] {
-            flex: 1;
-            background: #1e1e3a;
-            border: 1px solid #3a3a5a;
-            border-radius: 12px;
-            padding: 12px 16px;
-            color: #e0e0e0;
-            font-size: 14px;
-            outline: none;
-            transition: border 0.2s;
-        }
-
-        .input-area input[type="text"]:focus {
-            border-color: #3a7bd5;
-        }
-
-        .input-area input[type="text"]::placeholder {
-            color: #666;
-        }
-
-        .input-area button {
-            background: linear-gradient(135deg, #3a7bd5, #00d2ff);
-            border: none;
-            border-radius: 12px;
-            padding: 12px 24px;
-            color: #fff;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-            white-space: nowrap;
-        }
-
-        .input-area button:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 4px 20px rgba(58, 123, 213, 0.4);
-        }
-
-        .input-area button:active {
-            transform: translateY(0);
-        }
-
-        .input-area button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
-
-        .input-area .btn-image {
-            background: #2a2a4a;
-            border: 1px solid #3a3a5a;
-            padding: 12px 16px;
-            font-size: 18px;
-            border-radius: 12px;
-            cursor: pointer;
-            transition: background 0.2s;
-            color: #e0e0e0;
-        }
-
-        .input-area .btn-image:hover {
-            background: #3a3a5a;
-        }
-
-        /* ---------- 图片预览 ---------- */
-        .image-preview {
-            display: none;
-            align-items: center;
-            gap: 12px;
-            padding: 8px 12px;
-            background: #1e1e3a;
-            border-radius: 10px;
-            border: 1px solid #3a3a5a;
-        }
-
-        .image-preview.show {
-            display: flex;
-        }
-
-        .image-preview img {
-            max-height: 60px;
-            max-width: 60px;
-            border-radius: 6px;
-            object-fit: cover;
-        }
-
-        .image-preview .file-name {
-            font-size: 13px;
-            color: #aaa;
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .image-preview .btn-remove {
-            background: none;
-            border: none;
-            color: #f87171;
-            cursor: pointer;
-            font-size: 16px;
-            padding: 4px 8px;
-            border-radius: 4px;
-        }
-
-        .image-preview .btn-remove:hover {
-            background: rgba(239, 68, 68, 0.2);
-        }
-
-        /* ==================== 错误/系统消息 ==================== */
-        .message.error {
-            align-self: center;
-            background: rgba(239, 68, 68, 0.15);
-            border: 1px solid rgba(239, 68, 68, 0.3);
-            color: #f87171;
-            border-radius: 8px;
-            font-size: 13px;
-            max-width: 90%;
-            text-align: center;
-        }
-
-        .message.system {
-            align-self: center;
-            background: rgba(74, 222, 128, 0.1);
-            border: 1px solid rgba(74, 222, 128, 0.2);
-            color: #4ade80;
-            border-radius: 8px;
-            font-size: 12px;
-            max-width: 90%;
-            text-align: center;
-        }
-
-        /* ==================== 响应式 ==================== */
         @media (max-width: 640px) {
-            .message {
-                max-width: 85%;
-            }
-            .header {
-                flex-direction: column;
-                gap: 8px;
-                align-items: stretch;
-            }
-            .header-right {
-                flex-wrap: wrap;
-            }
-            .header-right input {
-                flex: 1;
-            }
-            .input-area {
-                padding: 12px 16px;
-            }
-            .input-row {
-                flex-wrap: wrap;
-            }
-            .input-area button {
-                flex: 1;
-                padding: 12px 16px;
-            }
-            .input-area .btn-image {
-                padding: 12px 16px;
-            }
+            .message-row { max-width: 92%; }
+            .header .logo { font-size: 16px; }
+            .room-bar { padding: 6px 12px; }
+            .input-area { padding: 8px 12px; }
+            .avatar { width: 30px; height: 30px; }
         }
     </style>
 </head>
 <body>
 
-    <!-- ==================== 顶部栏 ==================== -->
-    <div class="header">
-        <div class="header-left">
-            <span class="logo">🤖 AI Agent</span>
-            <span class="status-dot"></span>
-            <span class="status-text" id="statusText">已连接</span>
-        </div>
-        <div class="header-right">
-            <label for="userId">用户ID</label>
-            <input type="text" id="userId" value="web_user" placeholder="输入用户ID" onchange="switchUser()">
-            <button onclick="switchUser()" style="background:transparent;border:1px solid #3a7bd5;border-radius:8px;padding:6px 12px;color:#3a7bd5;cursor:pointer;font-size:13px;">切换用户</button>
-            <button onclick="clearChat()" style="background:transparent;border:1px solid #3a3a5a;border-radius:8px;padding:6px 12px;color:#888;cursor:pointer;font-size:13px;">清空</button>
-        </div>
+<!-- ==================== 顶部栏 ==================== -->
+<div class="header">
+    <div class="header-left">
+        <span class="logo">🧠 MemBrain</span>
+        <span class="status-dot"></span>
+        <span class="status-text" id="statusText">已连接</span>
     </div>
-
-    <!-- ==================== 聊天区域 ==================== -->
-    <div class="chat-container" id="chatContainer"></div>
-
-    <!-- ==================== 正在输入指示器 ==================== -->
-    <div class="typing-indicator" id="typingIndicator">
-        <span></span><span></span><span></span>
+    <div class="header-right">
+        <label>模式</label>
+        <select id="modeSelect" onchange="switchMode()">
+            <option value="single">💬 单人对话</option>
+            <option value="group">👥 多人群聊</option>
+        </select>
+        <label for="userId">用户ID</label>
+        <input type="text" id="userId" value="ひかりちゃん" placeholder="用户ID">
+        <button onclick="switchUser()">切换</button>
+        <button onclick="clearChat()">清空</button>
     </div>
+</div>
 
-    <!-- ==================== 输入区 ==================== -->
-    <div class="input-area">
-        <!-- 语音合成开关 -->
-        <div class="tts-toggle-row">
-            <span>🔊 语音合成</span>
-            <label class="tts-switch">
-                <input type="checkbox" id="ttsToggle" checked>
-                <span class="tts-slider"></span>
-            </label>
-        </div>
+<!-- ==================== 房间栏（群聊模式） ==================== -->
+<div class="room-bar" id="roomBar">
+    <span class="room-label">🏠 房间</span>
+    <select id="roomSelect" onchange="onRoomChange()">
+        <option value="">-- 选择或创建 --</option>
+    </select>
+    <input type="text" id="newRoomInput" placeholder="新房间名" style="width:100px">
+    <button onclick="createRoom()">创建</button>
+    <span>角色</span>
+    <select id="myRoleSelect">
+        <option value="kasumi">香澄</option>
+    </select>
+    <button onclick="joinRoom()">加入</button>
+    <button onclick="leaveRoom()">退出</button>
+    <span class="agent-list" id="agentList"></span>
+</div>
 
-        <!-- 图片预览 -->
-        <div class="image-preview" id="imagePreview">
-            <img id="previewImg" src="" alt="预览">
-            <span class="file-name" id="previewFileName">image.jpg</span>
-            <button class="btn-remove" onclick="removeImage()">✕</button>
-        </div>
+<!-- ==================== 聊天区域 ==================== -->
+<div class="chat-container" id="chatContainer"></div>
 
-        <!-- 输入行 -->
-        <div class="input-row">
-            <input type="text" id="messageInput" placeholder="输入消息，按 Enter 发送..." autofocus>
-            <button class="btn-image" id="imageBtn" title="上传图片">🖼️</button>
-            <button id="sendBtn" onclick="sendMessage()">发送</button>
-        </div>
+<!-- ==================== 正在输入 ==================== -->
+<div class="typing-indicator" id="typingIndicator"><span></span><span></span><span></span></div>
 
-        <!-- 隐藏的文件输入 -->
-        <input type="file" id="imageInput" accept="image/*" style="display:none">
+<!-- ==================== 输入区 ==================== -->
+<div class="input-area">
+    <div class="tts-toggle-row">
+        <span>🔊 语音合成</span>
+        <label class="tts-switch">
+            <input type="checkbox" id="ttsToggle" checked>
+            <span class="tts-slider"></span>
+        </label>
     </div>
+    <div class="image-preview" id="imagePreview">
+        <img id="previewImg" src="" alt="预览">
+        <span class="file-name" id="previewFileName">image.jpg</span>
+        <button class="btn-remove" onclick="removeImage()">✕</button>
+    </div>
+    <div class="input-row">
+        <input type="text" id="messageInput" placeholder="输入消息，按 Enter 发送..." autofocus>
+        <button class="btn-image" id="imageBtn" title="上传图片">🖼️</button>
+        <button id="sendBtn" onclick="sendMessage()">发送</button>
+    </div>
+    <input type="file" id="imageInput" accept="image/*" style="display:none">
+</div>
 
-    <script>
-        // ==================== 全局状态 ====================
-        let selectedImageBase64 = null;   // 完整 Base64（含前缀）
-        let selectedImageName = '';
-        let ttsEnabled = true;   // 语音合成开关状态
+<script>
+    // ==================== 全局状态 ====================
+    let selectedImageBase64 = null;
+    let selectedImageName = '';
+    let ttsEnabled = true;
+    let currentMode = 'single';
 
-        // ==================== WebSocket 连接 ====================
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws/chat`;
-        let ws = null;
-        let reconnectTimer = null;
-        let messageQueue = [];
+    // 群聊状态
+    let currentRoomId = '';
+    let currentRoleId = 'kasumi';
+    let roomWs = null;
 
-        const chatContainer = document.getElementById('chatContainer');
-        const messageInput = document.getElementById('messageInput');
-        const sendBtn = document.getElementById('sendBtn');
-        const typingIndicator = document.getElementById('typingIndicator');
-        const statusText = document.getElementById('statusText');
-        const imageInput = document.getElementById('imageInput');
-        const imageBtn = document.getElementById('imageBtn');
-        const imagePreview = document.getElementById('imagePreview');
-        const previewImg = document.getElementById('previewImg');
-        const previewFileName = document.getElementById('previewFileName');
+    // 单聊 WebSocket
+    let singleWs = null;
+    let reconnectTimer = null;
+    let messageQueue = [];
 
-        // ==================== 安全获取 DOM 元素，防止 null ====================
-        function safeGet(id) {
-            const el = document.getElementById(id);
-            if (!el) console.warn(`Element with id "${id}" not found`);
-            return el;
+    // 头像基础路径
+    const AVATAR_BASE = '/static/avatars/agents/';
+    // 默认头像（角色头像不存在时使用）
+    const DEFAULT_AVATAR = '/static/avatars/agents/kasumi.png';
+
+    // DOM
+    const chatContainer = document.getElementById('chatContainer');
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const typingIndicator = document.getElementById('typingIndicator');
+    const statusText = document.getElementById('statusText');
+    const imageInput = document.getElementById('imageInput');
+    const imageBtn = document.getElementById('imageBtn');
+    const imagePreview = document.getElementById('imagePreview');
+    const previewImg = document.getElementById('previewImg');
+    const previewFileName = document.getElementById('previewFileName');
+    const ttsToggle = document.getElementById('ttsToggle');
+    const modeSelect = document.getElementById('modeSelect');
+    const roomBar = document.getElementById('roomBar');
+    const roomSelect = document.getElementById('roomSelect');
+    const newRoomInput = document.getElementById('newRoomInput');
+    const myRoleSelect = document.getElementById('myRoleSelect');
+    const agentList = document.getElementById('agentList');
+
+    // ==================== 头像工具 ====================
+    function getAvatarUrl(roleId, isUser) {
+        if (isUser) return '';  // 用户不带头像（或可用默认用户头像）
+        // 尝试找 role_id.png，找不到则用默认
+        return `${AVATAR_BASE}${roleId}.png`;
+    }
+
+    function getUserAvatarUrl(userId) {
+        // 用户头像：尝试找 user_id.png，没有则返回空字符串（不显示头像）
+        return `${AVATAR_BASE}${userId}.png`;
+    }
+
+    // ==================== 模式切换 ====================
+    function switchMode() {
+        const mode = modeSelect.value;
+        if (mode === currentMode) return;
+        currentMode = mode;
+
+        if (mode === 'group') {
+            roomBar.classList.add('show');
+            disconnectSingleWs();
+            refreshRoomList();
+            if (currentRoomId) {
+                connectRoomWs(currentRoomId);
+            }
+            addSystemMessage('👥 已切换到群聊模式');
+        } else {
+            roomBar.classList.remove('show');
+            disconnectRoomWs();
+            currentRoomId = '';
+            connectSingleWs();
+            addSystemMessage('💬 已切换到单人对话模式');
         }
-        const ttsToggle = safeGet('ttsToggle');
+    }
 
-        // ==================== WebSocket 连接 ====================
-        function connectWebSocket() {
-            if (ws && ws.readyState === WebSocket.OPEN) return;
+    // ==================== 房间管理 ====================
+    async function refreshRoomList() {
+        try {
+            const resp = await fetch('/api/rooms');
+            const data = await resp.json();
+            if (data.code === 0) {
+                roomSelect.innerHTML = '<option value="">-- 选择房间 --</option>';
+                data.data.forEach(r => {
+                    const opt = document.createElement('option');
+                    opt.value = r.room_id;
+                    opt.textContent = `${r.room_id} (${r.agent_count}人)`;
+                    if (r.room_id === currentRoomId) opt.selected = true;
+                    roomSelect.appendChild(opt);
+                });
+            }
+        } catch(e) {}
+    }
 
-            ws = new WebSocket(wsUrl);
+    async function createRoom() {
+        const roomId = newRoomInput.value.trim();
+        if (!roomId) { addSystemMessage('⚠️ 请输入房间名', true); return; }
+        const resp = await fetch('/api/rooms/create', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({room_id: roomId, topic: ''})
+        });
+        const data = await resp.json();
+        if (data.code === 0) {
+            addSystemMessage(`🏠 房间 "${roomId}" 创建成功`);
+            newRoomInput.value = '';
+            await refreshRoomList();
+            roomSelect.value = roomId;
+            onRoomChange();
+        } else {
+            addSystemMessage(`⚠️ ${data.message}`, true);
+        }
+    }
 
-            ws.onopen = function() {
-                console.log('[WS] 已连接');
-                statusText.textContent = '已连接';
-                statusText.style.color = '#4ade80';
-                sendBtn.disabled = false;
+    function onRoomChange() {
+        const rid = roomSelect.value;
+        if (!rid) {
+            disconnectRoomWs();
+            currentRoomId = '';
+            agentList.textContent = '';
+            return;
+        }
+        currentRoomId = rid;
+        connectRoomWs(rid);
+    }
 
-                while (messageQueue.length > 0) {
-                    const msg = messageQueue.shift();
-                    ws.send(JSON.stringify(msg));
-                }
-            };
+    async function joinRoom() {
+        if (!currentRoomId) { addSystemMessage('⚠️ 请先选择房间', true); return; }
+        const roleId = myRoleSelect.value;
+        const userId = document.getElementById('userId').value.trim() || 'anonymous';
 
-            ws.onmessage = function(event) {
-                try {
-                    const data = JSON.parse(event.data);
-                    handleServerMessage(data);
-                } catch (e) {
-                    console.error('[WS] 解析消息失败:', e);
-                }
-            };
+        const resp = await fetch(`/api/rooms/${currentRoomId}/join`, {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({role_id: roleId, user_id: userId, display_name: roleId})
+        });
+        const data = await resp.json();
+        if (data.code === 0) {
+            addSystemMessage(`✅ 已作为 "${roleId}" 加入房间`);
+            connectRoomWs(currentRoomId);
+        } else {
+            addSystemMessage(`⚠️ ${data.message}`, true);
+        }
+    }
 
-            ws.onerror = function(err) {
-                console.error('[WS] 错误:', err);
-                statusText.textContent = '连接错误';
-                statusText.style.color = '#f87171';
-            };
+    async function leaveRoom() {
+        if (!currentRoomId) return;
+        const roleId = myRoleSelect.value;
+        await fetch(`/api/rooms/${currentRoomId}/leave`, {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({role_id: roleId})
+        });
+        addSystemMessage(`👋 已离开房间`);
+        agentList.textContent = '';
+    }
 
-            ws.onclose = function() {
-                console.log('[WS] 连接关闭');
-                statusText.textContent = '已断开，重连中...';
+    // ==================== 群聊 WebSocket ====================
+    function connectRoomWs(roomId) {
+        disconnectRoomWs();
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const url = `${protocol}//${window.location.host}/ws/room/${roomId}`;
+
+        roomWs = new WebSocket(url);
+        statusText.textContent = `房间: ${roomId}`;
+        statusText.style.color = '#4ade80';
+
+        roomWs.onopen = function() {
+            console.log('[房间WS] 已连接', roomId);
+            sendBtn.disabled = false;
+        };
+
+        roomWs.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                handleRoomMessage(data);
+            } catch(e) { console.error(e); }
+        };
+
+        roomWs.onerror = function() {
+            statusText.textContent = '房间连接错误';
+            statusText.style.color = '#f87171';
+        };
+
+        roomWs.onclose = function() {
+            console.log('[房间WS] 断开', roomId);
+            if (currentMode === 'group' && currentRoomId === roomId) {
+                statusText.textContent = '房间断开';
                 statusText.style.color = '#fbbf24';
                 sendBtn.disabled = true;
-
-                if (reconnectTimer) clearTimeout(reconnectTimer);
-                reconnectTimer = setTimeout(() => {
-                    console.log('[WS] 尝试重连...');
-                    connectWebSocket();
-                }, 3000);
-            };
-        }
-
-        // ==================== 切换用户 ====================
-        function switchUser() {
-            const userId = document.getElementById('userId').value.trim() || 'web_user';
-            chatContainer.innerHTML = '';
-            addMessage('system', `👤 已切换到用户: ${userId}`);
-            addMessage('assistant', `呐呐！切换到 ${userId} 啦！我是户山香澄，让我们一起闪闪发光吧！有什么想聊的尽管说`);
-            if (ws) {
-                ws.close();
             }
-            connectWebSocket();
+        };
+    }
+
+    function disconnectRoomWs() {
+        if (roomWs) {
+            try { roomWs.close(); } catch(e) {}
+            roomWs = null;
         }
+    }
 
-        // ==================== 处理服务端消息 ====================
-        function handleServerMessage(data) {
-            typingIndicator.classList.remove('show');
+    function handleRoomMessage(data) {
+        typingIndicator.classList.remove('show');
 
-            if (data.type === 'message') {
-                // 显示文字消息
-                addMessage('assistant', data.content);
-
-                // 如果有音频，自动播放
-                if (ttsEnabled && data.audio) {
-                    const audio = new Audio("data:audio/wav;base64," + data.audio);
-                    audio.play().catch(e => console.log('[音频] 播放失败:', e));
-                }
-            } else if (data.type === 'error') {
-                addMessage('error', '⚠️ ' + data.content);
-            } else if (data.type === 'system') {
-                addMessage('system', data.content);
-            } else if (data.type === 'debug') {
-                console.log('[调试]', data.content);
-            }
-        }
-
-        // ==================== 添加消息气泡 ====================
-        function addMessage(role, content, imageBase64) {
-            const div = document.createElement('div');
-            div.className = `message ${role}`;
-
-            const now = new Date();
-            const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-
-            let label = '';
-            if (role === 'user') label = '你';
-            else if (role === 'assistant') label = '🤖 AI';
-            else if (role === 'error') label = '⚠️';
-            else if (role === 'system') label = 'ℹ️';
-
-            let imageHtml = '';
-            if (imageBase64) {
-                imageHtml = `<img class="msg-image" src="${imageBase64}" alt="图片">`;
-            }
-
-            div.innerHTML = `
-                <div class="msg-label">${label}</div>
-                <div>${escapeHtml(content)}</div>
-                ${imageHtml}
-                <div class="msg-time">${timeStr}</div>
-            `;
-
-            chatContainer.appendChild(div);
-            scrollToBottom();
-        }
-
-        // ==================== 发送消息 ====================
-        function sendMessage() {
-            const text = messageInput.value.trim();
-            if (!text && !selectedImageBase64) return;
-
-            const user_id = document.getElementById('userId').value.trim() || 'web_user';
-
-            // 显示用户消息（含图片）
-            addMessage('user', text || '📷 发送了一张图片', selectedImageBase64);
-
-            // 构建 payload
-            const payload = {
-                user_id: user_id,
-                message: text || '这张图片里有什么？',
-                tts: ttsEnabled   // 把开关状态传给后端
-            };
-            if (selectedImageBase64) {
-                payload.image = selectedImageBase64;
-            }
-
-            // 清空输入
-            messageInput.value = '';
-            removeImage();
-            messageInput.focus();
-
-            typingIndicator.classList.add('show');
-
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify(payload));
-            } else {
-                addMessage('error', '⚠️ 未连接到服务器，消息已加入队列...');
-                messageQueue.push(payload);
-                connectWebSocket();
-            }
-        }
-
-        // ==================== 图片选择处理 ====================
-        function handleImageSelect(file) {
-            if (!file) return;
-
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                selectedImageBase64 = e.target.result;
-                selectedImageName = file.name;
-                updateImagePreview(selectedImageBase64, selectedImageName);
-            };
-            reader.readAsDataURL(file);
-        }
-
-        function updateImagePreview(base64, name) {
-            previewImg.src = base64;
-            previewFileName.textContent = name;
-            imagePreview.classList.add('show');
-        }
-
-        function removeImage() {
-            selectedImageBase64 = null;
-            selectedImageName = '';
-            imagePreview.classList.remove('show');
-            previewImg.src = '';
-            imageInput.value = '';
-        }
-
-        // ==================== 清空聊天 ====================
-        function clearChat() {
-            if (confirm('确定清空聊天记录？只是清空显示，不影响记忆。')) {
-                chatContainer.innerHTML = '';
-                addMessage('system', '聊天显示已清空');
-            }
-        }
-
-        // ==================== 工具函数 ====================
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        function scrollToBottom() {
-            setTimeout(() => {
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-            }, 50);
-        }
-
-        // ==================== 事件绑定 ====================
-        messageInput.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
-        });
-
-        imageBtn.addEventListener('click', function() {
-            imageInput.click();
-        });
-
-        imageInput.addEventListener('change', function(e) {
-            if (e.target.files && e.target.files.length > 0) {
-                handleImageSelect(e.target.files[0]);
-            }
-        });
-
-        // 恢复 TTS 开关状态
-        try {
-            const savedTts = localStorage.getItem('ttsEnabled');
-            if (savedTts !== null) {
-                ttsEnabled = savedTts === 'true';
-            }
-            if (ttsToggle) ttsToggle.checked = ttsEnabled;
-        } catch (e) {
-            console.warn('localStorage 访问失败，使用默认开启状态');
-            ttsEnabled = true;
-        }
-
-        // 监听开关变化
-        if (ttsToggle) {
-            ttsToggle.addEventListener('change', function() {
-                ttsEnabled = this.checked;
-                try {
-                    localStorage.setItem('ttsEnabled', String(ttsEnabled));
-                } catch (e) {}
-                console.log('[TTS] 开关状态:', ttsEnabled ? '启用' : '禁用');
+        if (data.type === 'room_info') {
+            const info = data.data;
+            updateAgentList(info.agents || []);
+        } else if (data.type === 'chat_message') {
+            const msg = data.data;
+            const isUser = msg.is_user;
+            const roleId = msg.sender_role || 'unknown';
+            const label = isUser ? roleId : roleId;
+            addMessageWithAvatar(isUser ? 'right' : 'left', label, msg.content, roleId, isUser);
+        } else if (data.type === 'join_ok') {
+            addSystemMessage(`✅ 已作为 ${data.role_id} 加入`);
+        } else if (data.type === 'history') {
+            const msgs = data.data || [];
+            msgs.forEach(m => {
+                const isUser = m.is_user;
+                const roleId = m.sender_role || 'unknown';
+                addMessageWithAvatar(isUser ? 'right' : 'left', roleId, m.content, roleId, isUser);
             });
+        } else if (data.type === 'system') {
+            addSystemMessage(data.content);
+        } else if (data.type === 'error') {
+            addSystemMessage('⚠️ ' + data.content, true);
+        }
+    }
+
+    function updateAgentList(agents) {
+        if (!agents || agents.length === 0) {
+            agentList.textContent = '(无角色)';
+            return;
+        }
+        const names = agents.map(a => a.role_id);
+        agentList.textContent = `在线: ${names.join(', ')}`;
+    }
+
+    // ==================== 单聊 WebSocket ====================
+    function connectSingleWs() {
+        disconnectSingleWs();
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const url = `${protocol}//${window.location.host}/ws/chat`;
+
+        singleWs = new WebSocket(url);
+        statusText.textContent = '已连接';
+        statusText.style.color = '#4ade80';
+        sendBtn.disabled = false;
+
+        singleWs.onopen = function() {
+            while (messageQueue.length > 0) {
+                singleWs.send(JSON.stringify(messageQueue.shift()));
+            }
+        };
+
+        singleWs.onmessage = function(event) {
+            typingIndicator.classList.remove('show');
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'message') {
+                    // 单人模式：AI 回复带 kasumi 头像
+                    addMessageWithAvatar('left', 'Kasumi', data.content, 'kasumi', false);
+                    if (ttsEnabled && data.audio) {
+                        new Audio("data:audio/wav;base64," + data.audio).play().catch(()=>{});
+                    }
+                } else if (data.type === 'error') {
+                    addSystemMessage('⚠️ ' + data.content, true);
+                } else if (data.type === 'system') {
+                    addSystemMessage(data.content);
+                }
+            } catch(e) { console.error(e); }
+        };
+
+        singleWs.onerror = function() {
+            statusText.textContent = '连接错误';
+            statusText.style.color = '#f87171';
+        };
+
+        singleWs.onclose = function() {
+            statusText.textContent = '已断开，重连中...';
+            statusText.style.color = '#fbbf24';
+            sendBtn.disabled = true;
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            if (currentMode === 'single') {
+                reconnectTimer = setTimeout(connectSingleWs, 3000);
+            }
+        };
+    }
+
+    function disconnectSingleWs() {
+        if (singleWs) {
+            try { singleWs.close(); } catch(e) {}
+            singleWs = null;
+        }
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    }
+
+    // ==================== 发送消息 ====================
+    function sendMessage() {
+        const text = messageInput.value.trim();
+        if (!text && !selectedImageBase64) return;
+
+        if (currentMode === 'group') {
+            sendRoomMessage(text);
+        } else {
+            sendSingleMessage(text);
+        }
+    }
+
+    function sendSingleMessage(text) {
+        const user_id = document.getElementById('userId').value.trim() || 'ひかりちゃん';
+
+        // 用户消息不带角色头像（或者用通用用户头像）
+        addMessageWithAvatar('right', '你', text || '📷 发送了一张图片', user_id, true, selectedImageBase64);
+
+        const payload = { user_id, message: text || '这张图片里有什么？', tts: ttsEnabled };
+        if (selectedImageBase64) payload.image = selectedImageBase64;
+
+        messageInput.value = '';
+        removeImage();
+        messageInput.focus();
+        typingIndicator.classList.add('show');
+
+        if (singleWs && singleWs.readyState === WebSocket.OPEN) {
+            singleWs.send(JSON.stringify(payload));
+        } else {
+            addSystemMessage('⚠️ 未连接服务器', true);
+            messageQueue.push(payload);
+            connectSingleWs();
+        }
+    }
+
+    function sendRoomMessage(text) {
+        if (!currentRoomId || !roomWs || roomWs.readyState !== WebSocket.OPEN) {
+            addSystemMessage('⚠️ 未连接到房间', true);
+            return;
+        }
+        const userId = document.getElementById('userId').value.trim() || 'anonymous';
+        const roleId = myRoleSelect.value;
+
+        // 用户发的群消息，如果是选择的角色，带角色头像
+        addMessageWithAvatar('right', roleId, text, roleId, false);
+
+        const payload = {
+            action: 'message',
+            user_id: userId,
+            role_id: roleId,
+            content: text
+        };
+
+        messageInput.value = '';
+        removeImage();
+        messageInput.focus();
+        typingIndicator.classList.add('show');
+
+        roomWs.send(JSON.stringify(payload));
+    }
+
+    // ==================== 消息显示（带头像） ====================
+    function addMessageWithAvatar(side, label, content, roleId, isUser, imageBase64) {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
+
+        const row = document.createElement('div');
+        row.className = `message-row ${side}`;
+
+        // 头像
+        let avatarHtml = '';
+        if (isUser) {
+            // 用户可以选择不显示头像或显示通用头像
+            avatarHtml = `<img class="avatar user-avatar" src="/static/avatars/agents/default_user.png" alt="user" onerror="this.style.display='none'">`;
+        } else {
+            avatarHtml = `<img class="avatar agent-avatar" src="${AVATAR_BASE}${roleId}.png" alt="${roleId}" onerror="this.src='${DEFAULT_AVATAR}'">`;
         }
 
-        // ==================== 启动 ====================
-        connectWebSocket();
-        addMessage('system', '⭐ 香澄上线啦！让我们一起寻找闪闪发光的东西吧！支持图片上传哦～');
-        addMessage('assistant', '呐呐！你来啦～香澄等你好久了！今天想聊点什么呢？キラキラ☆ドキドキ！');
-    </script>
+        let imageHtml = imageBase64 ? `<img class="msg-image" src="${imageBase64}" alt="图片">` : '';
+
+        const bubble = document.createElement('div');
+        bubble.className = 'message';
+        bubble.innerHTML = `
+            <div class="msg-label">${escapeHtml(label)}</div>
+            <div>${escapeHtml(content)}</div>
+            ${imageHtml}
+            <div class="msg-time">${timeStr}</div>
+        `;
+
+        if (side === 'right') {
+            row.appendChild(bubble);
+            row.appendChild(avatarHtml);  // 头像在右侧
+        } else {
+            row.appendChild(avatarHtml);  // 头像在左侧
+            row.appendChild(bubble);
+        }
+
+        chatContainer.appendChild(row);
+        scrollToBottom();
+    }
+
+    function addSystemMessage(content, isError) {
+        const div = document.createElement('div');
+        div.className = isError ? 'message error-row' : 'message system-row';
+        div.textContent = content;
+        chatContainer.appendChild(div);
+        scrollToBottom();
+    }
+
+    // ==================== 工具函数 ====================
+    function escapeHtml(text) {
+        const d = document.createElement('div');
+        d.textContent = text;
+        return d.innerHTML;
+    }
+    function scrollToBottom() {
+        setTimeout(() => { chatContainer.scrollTop = chatContainer.scrollHeight; }, 50);
+    }
+
+    // ==================== 切换用户 ====================
+    function switchUser() {
+        chatContainer.innerHTML = '';
+        addSystemMessage(`👤 已切换到用户: ${document.getElementById('userId').value.trim() || 'ひかりちゃん'}`);
+        if (currentMode === 'single') {
+            disconnectSingleWs();
+            connectSingleWs();
+        }
+    }
+
+    // ==================== 清空 ====================
+    function clearChat() {
+        if (confirm('确定清空聊天显示？不影响记忆。')) {
+            chatContainer.innerHTML = '';
+            addSystemMessage('聊天显示已清空');
+        }
+    }
+
+    // ==================== 图片处理 ====================
+    function handleImageSelect(file) {
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            selectedImageBase64 = e.target.result;
+            selectedImageName = file.name;
+            previewImg.src = selectedImageBase64;
+            previewFileName.textContent = selectedImageName;
+            imagePreview.classList.add('show');
+        };
+        reader.readAsDataURL(file);
+    }
+    function removeImage() {
+        selectedImageBase64 = null;
+        selectedImageName = '';
+        imagePreview.classList.remove('show');
+        previewImg.src = '';
+        imageInput.value = '';
+    }
+
+    // ==================== 事件绑定 ====================
+    messageInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    });
+    imageBtn.addEventListener('click', () => imageInput.click());
+    imageInput.addEventListener('change', function(e) {
+        if (e.target.files && e.target.files.length > 0) handleImageSelect(e.target.files[0]);
+    });
+
+    // TTS
+    try {
+        const saved = localStorage.getItem('ttsEnabled');
+        if (saved !== null) ttsEnabled = saved === 'true';
+        if (ttsToggle) ttsToggle.checked = ttsEnabled;
+    } catch(e) {}
+    if (ttsToggle) {
+        ttsToggle.addEventListener('change', function() {
+            ttsEnabled = this.checked;
+            try { localStorage.setItem('ttsEnabled', String(ttsEnabled)); } catch(e) {}
+        });
+    }
+
+    // ==================== 启动 ====================
+    connectSingleWs();
+    addSystemMessage('⭐ 欢迎使用 MemBrain！支持单人对话和多人群聊');
+    addMessageWithAvatar('left', 'Kasumi', '呐呐～你来啦！在右上角切换到群聊模式，和大家一起聊天吧！キラキラ☆ドキドキ！', 'kasumi', false);
+</script>
 </body>
 </html>

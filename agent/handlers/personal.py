@@ -47,6 +47,15 @@ def handle_personal(self, user_message: str, state: dict, role_id: Optional[str]
 
     【当前日期】{current_date}
 
+    【当前用户信息】
+    - 当前用户的身份标识是：{user_id}（你可以用这个称呼来指代用户）
+    - 在对话中，“你”始终指代当前用户。
+
+    【重要指代规则】
+    - “你”始终指代当前用户（{user_id}）。
+    - “我”指代香澄本人。
+    - 当表达喜欢时，应使用“我喜欢你”，而不是“我喜欢户山香澄”。
+
     """
     
     # 事实部分（L4）
@@ -78,21 +87,8 @@ def handle_personal(self, user_message: str, state: dict, role_id: Optional[str]
     
     chat_messages.append({"role": "user", "content": user_message})
 
-    # ========== 4. 调用主模型生成回复（带“不确定”检测） ==========
-    # 这里在 system prompt 里多加一句指令，让 LLM 在不确定时输出标记
-    chat_messages[0]["content"] += "\n\n【重要指令】如果你不确定答案，请在回复中包含「@@@UNCERTAIN@@@」。"
-
-    # ========== 主模型生成回复 ==========
-    final_reply = self._generate_with_main_model(chat_messages, image)
-
-    # ========== 5. 检测 LLM 是否不确定 ==========
-    if "@@@UNCERTAIN@@@" in final_reply:
-        # 移除标记
-        final_reply = final_reply.replace("@@@UNCERTAIN@@@", "").strip()
-        log_router("PERSONAL 分支：LLM 表示不确定，走搜索兜底")
-        # 触发搜索
-        return force_search(self, user_message, state)
-    
+    # ========== 4. 调用主模型生成回复 ==========
+    final_reply = self._generate_with_main_model(chat_messages, image, enable_search_fallback=True)
 
     log_time("PERSONAL 处理完成", _start)
     return {

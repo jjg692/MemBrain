@@ -30,6 +30,7 @@ SEARCH_TOOL_OLLAMA = {
 # ================== 搜索 API ==================
 def search_baidu_api(query: str, max_results: int = 3) -> str:
     """使用百度AI搜索官方API（每天100次免费）"""
+    print(f"[搜索] 开始搜索{query} ")
     if not BAIDU_API_KEY:
         return "百度API Key未配置，请检查.env文件"
     

@@ -18,6 +18,7 @@ from agent.router import classify_query
 from agent.handlers import handle_personal, force_search, handle_result_node
 from core.logger import log_time, log_debug, log_router
 from core.config import MEMORY_CONTEXT_MAX_ROUNDS, MEMORY_DEBUG
+import ast
 
 
 class LangGraphMemoryAgent:
@@ -70,22 +71,11 @@ class LangGraphMemoryAgent:
 
         self._fact_extractor_loaded = True  # 占位，实际用 memory_manager 处理
 
+        # ========== 当前角色 ID ==========
+        self.role_id = "kasumi"
+
         # ========== 短期对话历史（当前会话） ==========
-        self.conversation_history = {}  
-
-
-        # ========== 初始化 L5 角色事实 ==========
-        if self.system_prompt:
-            try:
-                from core.role.loader import init_role_to_memory
-                init_role_to_memory(
-                    role_prompt=self.system_prompt,
-                    role_id="kasumi",
-                    tool_adapter=self.tool_adapter,
-                    memory=self.memory
-                )
-            except Exception as e:
-                print(f"[Graph] L5 初始化失败: {e}")
+        self.conversation_history = {}    
 
         # ========== 构建 LangGraph 图 ==========
         self.graph = self._build_graph()
@@ -131,6 +121,16 @@ class LangGraphMemoryAgent:
         """
         
         user_id = state.get("user_id", "default_user")
+
+        # ========== 注入 L5 角色图谱信息 ==========
+        role_context = ""
+        try:
+            role_facts = self.memory.get_role_facts("kasumi")
+            if role_facts:
+                role_context = "【当前角色信息】\n" + "\n".join(f"- {f}" for f in role_facts) + "\n"
+        except Exception:
+            pass
+        # =========================================
         
         # ========== 复用原有的上下文构建逻辑 ==========
         # 1. 从短期记忆（向量库）获取最近对话
@@ -158,6 +158,8 @@ class LangGraphMemoryAgent:
         
         # 4. 构建上下文
         context_parts = []
+        if role_context:
+            context_parts.append(role_context)
         if short_term_texts:
             context_parts.append("【存储的最近对话】\n" + "\n".join(short_term_texts))
         if long_term_texts:
@@ -165,17 +167,37 @@ class LangGraphMemoryAgent:
         if recent_history:
             context_parts.append("【最近对话】\n" + "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history]))
         
-        # # 如果没有任何上下文，无法改写
-        # if not context_parts:
-        #     return {"need_rewrite": False, "query": user_message, "reason": "无上下文"}
-        
         context = "\n\n".join(context_parts)
-        # ====================================================
         
         # ========== 调用模型进行查询改写 ==========
         # 复用原有的 tool_adapter，但改变 prompt 要求
         rewrite_prompt = f"""
-        你是一个查询改写器。请根据对话上下文，将用户问题改写成**完整的、可独立理解的问题**。
+        你是一个查询改写器。你的任务是：**只处理两种极端情况，其他情况一律原样输出。**
+
+        【唯一允许改写的两种情况】
+        1. **指代消解**：问题中包含“那个”、“这款”、“刚才的”、“它”、“她”、“他”等指代词，且上下文中有明确的实体可以替换。
+        2. **省略补全**：问题中缺少主语或对象，导致无法独立理解（如“那明天呢”缺少时间指向）。
+
+        【绝对禁止】
+        - 不要改已有明确实体（地名、人名、物品名）——例如“长沙”就是“长沙”，不是任何别的东西。
+        - 不要添加上下文隐含信息——如果用户没说“长沙”，就别加“长沙”；如果用户说了“长沙”，就别改成别的。
+        - 不要解释或扩写——问题越短越不改。
+        - 不要改变问题性质——“是什么”永远是“是什么”。
+
+        【示例】
+        用户：长沙今天天气怎么样
+        → 输出：{{"status": "no_rewrite", "rewritten": "长沙今天天气怎么样"}}
+
+        用户：那个好吃吗？
+        上下文：用户说“草莓蛋糕很好吃”
+        → 输出：{{"status": "success", "rewritten": "草莓蛋糕好吃吗", "entity": "草莓蛋糕"}}
+
+        用户：那明天呢？
+        上下文：用户说“明天去长沙”
+        → 输出：{{"status": "success", "rewritten": "明天去长沙吗", "entity": "长沙"}}
+
+        用户：小香澄喜欢吃什么？
+        → 输出：{{"status": "no_rewrite", "rewritten": "小香澄喜欢吃什么"}}
 
         【上下文】
         {context}
@@ -183,27 +205,7 @@ class LangGraphMemoryAgent:
         【用户原问题】
         {user_message}
 
-        【任务】
-        1. 如果原问题中有指代词（"那个"、"这款"、"刚才的"等），将其替换为具体的实体名称。
-        2. 如果原问题中有省略（如"那明天呢"），补充缺失的信息（如"长沙明天天气怎么样"）。
-        3. 如果原问题中缺少主语或宾语，根据上下文补全。
-        4. **不要改变原问题的性质**：
-        - 如果原问题是陈述句，保持陈述句。
-        - 如果原问题是疑问句，保持疑问句。
-        - 如果原问题是询问（如"怎么样"、"是什么"），保持询问。
-        - 如果原问题是请求（如"推荐"、"帮我查"），保持请求。
-        5. **不要添加原问题中没有的意图**：
-        - 如用户没说"好看吗"，就不要加"好看吗"。
-        - 如用户没说"怎么样"，就不要加"怎么样"。
-        6. 如果原问题已经很完整，直接输出原问题。
-
-        【输出格式】
-        根据情况输出对应 JSON：
-        - 成功改写：{{"status": "success", "rewritten": "改写后的问题", "entity": "实体名"}}
-        - 多个候选：{{"status": "multiple", "candidates": ["候选1", "候选2"], "rewritten": "原问题"}}
-        - 无指代或改写失败：{{"status": "failed", "rewritten": "原问题"}}
-
-        只输出 JSON，不要输出其他内容。
+        只输出 JSON，不要其他内容。
         """
         try:
             result = self.tool_adapter.chat_with_tools(
@@ -217,12 +219,45 @@ class LangGraphMemoryAgent:
             content = result.get("content", "")
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
             if json_match:
-                data = json.loads(json_match.group())
+
+                # ... 获取 content ...
+                data = None
+
+                # 1. 尝试直接解析 JSON
+                try:
+                    data = json.loads(content.strip())
+                except json.JSONDecodeError:
+                    pass
+                # 2. 尝试用 ast.literal_eval 解析 Python 字典（支持单引号）
+                if data is None:
+                    try:
+                        parsed = ast.literal_eval(content.strip())
+                        if isinstance(parsed, dict):
+                            data = parsed
+                    except:
+                        pass
+                # 3. 尝试提取花括号内的内容并解析
+                if data is None:
+                    json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                    if json_match:
+                        try:
+                            data = json.loads(json_match.group())
+                        except:
+                            # 再试一次 ast.literal_eval
+                            try:
+                                parsed = ast.literal_eval(json_match.group())
+                                if isinstance(parsed, dict):
+                                    data = parsed
+                            except:
+                                pass
+
+                if data is None:
+                    data = {}
                 status = data.get("status", "failed")
                 rewritten = data.get("rewritten", user_message)
                 candidates = data.get("candidates", [])
                 
-                if status == "success" and rewritten != user_message:
+                if status == "success":
                     print(f"[查询改写] 成功: {user_message} → {rewritten}")
                     return {"status": "success", "query": rewritten, "entity": data.get("entity", "")}
                 elif status == "multiple" and candidates:
@@ -233,7 +268,8 @@ class LangGraphMemoryAgent:
             return {"status": "failed", "query": user_message}
         except Exception as e:
             print(f"[查询改写] 失败: {e}")
-            return {"need_rewrite": False, "query": user_message}
+            print(f"[查询改写] 原始内容: {content}")  # 打印前200字符
+            return {"status": "failed", "query": user_message}
 
     def _agent_node(self, state: AgentState, config):
         """
@@ -367,22 +403,28 @@ class LangGraphMemoryAgent:
 
         return "end"
 
-    def _generate_with_main_model(self, messages, image: Optional[str] = None):
+    def _generate_with_main_model(self, messages, image: Optional[str] = None, enable_search_fallback: bool = False):
         """
-        用主模型生成回复，支持图片输入
-
-        Args:
-            messages: 消息列表
-            image: 图片 Base64 数据（可选）
-
-        Returns:
-            主模型生成的回复文本
+        主模型生成回复，支持在不确定时触发搜索
         """
         import re
         _start = time.time()
         msgs = messages.copy()
 
-        # 处理图片输入（多模态）
+        # 如果启用搜索兜底，在 system prompt 中加入搜索权限
+        if enable_search_fallback:
+            for msg in msgs:
+                if msg.get("role") == "system":
+                    msg["content"] += """
+
+    【搜索工具权限】
+    - 如果你认为自己无法回答用户的问题，或者问题需要实时信息（天气、新闻、推荐、评分等），你可以触发搜索。
+    - 当你决定需要搜索时，在回复的开头输出：[SEARCH] 搜索关键词
+    - 如果你能回答，请正常回复，不要输出 [SEARCH] 标记。
+    """
+                    break
+
+        # 处理图片输入
         if image:
             image_data = re.sub(r'^data:image/.+;base64,', '', image)
             for msg in reversed(msgs):
@@ -391,10 +433,27 @@ class LangGraphMemoryAgent:
                     break
 
         try:
-            # result = self.main_adapter.chat_with_tools(messages=msgs, tools=None)
             result = self.main_adapter.chat(messages=msgs)
+            content = result.get("content", "")
+            
+            # 检测是否触发了搜索
+            if enable_search_fallback and "[SEARCH]" in content:
+                match = re.search(r'\[SEARCH\]\s*(.+)', content)
+                if match:
+                    search_query = match.group(1).strip()
+                    log_router(f"主模型决定搜索: {search_query}")
+                    # 触发搜索
+                    from agent.handlers.realtime import force_search
+                    # 构造 state 用于 force_search
+                    state = {"user_id": "default_user", "iteration": 0}
+                    search_result = force_search(self, search_query, state)
+                    # 从搜索结果中提取回复
+                    # force_search 返回的是 {"messages": [...], ...}
+                    # 需要提取出搜索结果并重新生成回复
+                    return self._handle_search_result(search_result, msgs)
+            
             log_time("主模型生成回复", _start)
-            return result.get("content", "啊咧？香澄还没想好怎么回答呢…让我们再试一次吧！")
+            return content
         except Exception as e:
             log_debug("主模型", f"生成回复失败: {e}")
             return f"❌ 主模型生成回复失败：{e}"
@@ -420,7 +479,21 @@ class LangGraphMemoryAgent:
                     if assistant_part:
                         self.conversation_history[user_id].append({"role": "assistant", "content": assistant_part})
             if MEMORY_DEBUG:
-                print(f"[Graph] 加载历史: {len(self.conversation_history[user_id])} 条消息")
+                    print(f"[Graph] 加载历史: {len(self.conversation_history[user_id])} 条消息")
+
+
+
+
+
+
+
+            # === 触发模糊化（每次对话启动时检查旧记忆） ===
+            try:
+                fuzzy_count = self.memory_manager.trigger_fuzzify(user_id, role_id=self.role_id)
+                if fuzzy_count > 0:
+                    log_debug("模糊化", f"本次启动模糊化了 {fuzzy_count} 条记忆")
+            except Exception:
+                pass
 
         # 追加当前用户消息
         self.conversation_history[user_id].append({"role": "user", "content": user_message})
@@ -467,7 +540,7 @@ class LangGraphMemoryAgent:
             importance = self.memory_manager.judge_importance(user_message, reply)
             threading.Thread(
                 target=self.memory_manager.save_memory,
-                args=(user_id, user_message, reply, query_type, importance),
+                args=(user_id, "kasumi", user_message, reply, query_type, importance),
                 daemon=True
             ).start()
 

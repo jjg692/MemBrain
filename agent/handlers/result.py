@@ -8,7 +8,7 @@ from datetime import datetime
 from core.logger import log_time, log_debug
 
 
-def handle_result_node(self, state: dict) -> dict:
+def handle_result_node(self, state):
     """处理搜索结果，生成最终回复（不经过路由）"""
     _start = time.time()
     log_debug("RESULT", "开始处理搜索结果")
@@ -31,13 +31,17 @@ def handle_result_node(self, state: dict) -> dict:
         if hasattr(msg, 'type') and msg.type == 'tool':
             search_result = msg.content
             break
-    
+
     current_date = datetime.now().strftime("%Y年%m月%d日")
 
     # ========== 提取搜索词（用于调试和上下文） ==========
     search_query = state.get("search_query", "未知")
 
     full_system_prompt = f"""{self.system_prompt}
+
+    【当前用户信息】
+    - 当前用户的身份标识是：{user_id}（你可以用这个称呼来指代用户）
+    - 在对话中，“你”始终指代当前用户。
 
     【当前日期】{current_date}
 
@@ -56,6 +60,7 @@ def handle_result_node(self, state: dict) -> dict:
     2. 如果搜索结果中的日期与当前日期不符，请忽略搜索结果中的日期，使用当前日期。
 
     用户最新消息：{user_message}
+
     """
 
     chat_messages = [{"role": "system", "content": full_system_prompt}]
@@ -64,7 +69,7 @@ def handle_result_node(self, state: dict) -> dict:
         chat_messages.append({"role": msg["role"], "content": msg["content"]})
     chat_messages.append({"role": "user", "content": user_message})
 
-    final_reply = self._generate_with_main_model(chat_messages, image)
+    final_reply = self._generate_with_main_model(chat_messages, image, enable_search_fallback=True)
 
     log_time("RESULT 处理完成", _start)
     return {

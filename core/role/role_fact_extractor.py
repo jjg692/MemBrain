@@ -6,6 +6,11 @@
 import re
 import json
 from typing import List, Dict
+from core.config import MEMORY_DEBUG
+
+def log_dbg(msg: str):
+    if MEMORY_DEBUG:
+        print(f"[Arbitrator] {msg}")
 
 ROLE_FACT_PROMPT = """
 你是一个角色设定分析器。分析以下角色设定文本，提取出所有关于该角色的事实信息。
@@ -30,15 +35,28 @@ ROLE_FACT_PROMPT = """
 【角色设定】
 {role_prompt}
 
-输出 JSON 数组，格式：[{{"fact": "具体事实", "category": "分类"}}]
+【输出要求】
+- 输出必须是一个 JSON 数组。
+- 数组中的每个元素必须是一个对象，且每个对象必须且仅包含两个字段："fact" 和 "category"。
+- 每个对象必须严格按照以下格式写在一行内：{{"fact": "事实内容", "category": "分类"}}
+- 对象之间用英文逗号分隔，整体用方括号包裹。
+- 不要使用换行符、缩进、多余空格或注释。
+- 严禁在对象外部添加任何额外内容（如字符串、数字或其他对象）。
+
+正确示例：
+[{{"fact": "发型是猫耳朵状发髻", "category": "appearance"}}, {{"fact": "喜欢炸薯条和白米饭", "category": "preferences"}}]
+
+错误示例：
+[{{"fact": "发型是猫耳朵状发髻"}}, "category": "appearance"]  ← 禁止，category必须在对象内部
+
 只输出 JSON，不要其他内容。
 """
 
 
 def extract_role_facts(role_prompt: str, tool_adapter) -> List[Dict]:
-    """提取角色事实，返回事实列表"""
+    content = ""  # 初始化
     try:
-        prompt = ROLE_FACT_PROMPT.format(role_prompt=role_prompt[:3000])
+        prompt = ROLE_FACT_PROMPT.format(role_prompt=role_prompt)
         result = tool_adapter.chat_with_tools(
             messages=[
                 {"role": "system", "content": prompt},
@@ -47,14 +65,22 @@ def extract_role_facts(role_prompt: str, tool_adapter) -> List[Dict]:
             tools=None
         )
         content = result.get("content", "")
-        json_match = re.search(r'\[.*\]', content, re.DOTALL)
-        if json_match:
-            facts = json.loads(json_match.group())
-            if isinstance(facts, list):
-                valid = [f for f in facts if isinstance(f, dict) and f.get("fact")]
-                print(f"[RoleFactExtractor] 提取到 {len(valid)} 条角色事实")
-                return valid
-        return []
+
+        from core.memory.fact_extractor import _parse_json_facts
+        facts = _parse_json_facts(content)
+        if facts:
+            valid = [f for f in facts if isinstance(f, dict) and f.get("fact")]
+            log_dbg(f"[RoleFactExtractor] 提取到 {len(valid)} 条角色事实")
+            return valid
+        else:
+            log_dbg(f"[RoleFactExtractor] 解析为空，原始内容: {content[:200]}")
+            return []
     except Exception as e:
-        print(f"[RoleFactExtractor] 提取失败: {e}")
+        import traceback
+        traceback.print_exc()
+        log_dbg(f"[RoleFactExtractor] 提取失败: {e}")
+        if content:
+            log_dbg(f"[RoleFactExtractor] 失败时的原始内容: {content[:200]}")
+        else:
+            log_dbg(f"[RoleFactExtractor] 未能获取到 content")
         return []

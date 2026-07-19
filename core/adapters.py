@@ -50,7 +50,11 @@ class OllamaAdapter(LLMAdapter):
             # Ollama 的图片放在最后一条 user 消息的 images 字段中
             # 这里假设调用者已处理好，直接透传
             params["images"] = kwargs["images"]
-        response = ollama.chat(**params)
+        try:
+            response = ollama.chat(**params)
+        except Exception as e:
+            print(f"[OllamaAdapter] 调用失败: {e}")
+            return {"content": "", "tool_calls": []}
         msg = response.get("message", {})
         content = msg.get("content", "")
         tool_calls = msg.get("tool_calls", [])
