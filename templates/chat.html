@@ -602,13 +602,18 @@
         const row = document.createElement('div');
         row.className = `message-row ${side}`;
 
-        // 头像
-        let avatarHtml = '';
+        // 头像 - 改为创建 DOM 元素，而非字符串
+        const avatar = document.createElement('img');
+        avatar.className = isUser ? 'avatar user-avatar' : 'avatar agent-avatar';
+
         if (isUser) {
-            // 用户可以选择不显示头像或显示通用头像
-            avatarHtml = `<img class="avatar user-avatar" src="/static/avatars/agents/default_user.png" alt="user" onerror="this.style.display='none'">`;
+            avatar.src = '/static/avatars/agents/default_user.png';
+            avatar.alt = 'user';
+            avatar.onerror = function() { this.style.display = 'none'; };
         } else {
-            avatarHtml = `<img class="avatar agent-avatar" src="${AVATAR_BASE}${roleId}.png" alt="${roleId}" onerror="this.src='${DEFAULT_AVATAR}'">`;
+            avatar.src = `${AVATAR_BASE}${roleId}.png`;
+            avatar.alt = roleId;
+            avatar.onerror = function() { this.src = DEFAULT_AVATAR; };
         }
 
         let imageHtml = imageBase64 ? `<img class="msg-image" src="${imageBase64}" alt="图片">` : '';
@@ -624,9 +629,9 @@
 
         if (side === 'right') {
             row.appendChild(bubble);
-            row.appendChild(avatarHtml);  // 头像在右侧
+            row.appendChild(avatar);  // 头像在右侧
         } else {
-            row.appendChild(avatarHtml);  // 头像在左侧
+            row.appendChild(avatar);  // 头像在左侧
             row.appendChild(bubble);
         }
 
@@ -720,3 +725,5 @@
 </script>
 </body>
 </html>
+
+
