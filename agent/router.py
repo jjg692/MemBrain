@@ -9,6 +9,12 @@ def classify_query(self, user_message: str, rewrite_context: Optional[Dict] = No
         if MEMORY_DEBUG:
             print(f"[Router] 用户主动要求联网 -> REALTIME")
         return "REALTIME"
+    
+    # ===== 硬编码 PC 控制指令 =====
+    if "执行命令" in user_message:
+        if MEMORY_DEBUG:
+            print(f"[Router] 硬编码 PC_CONTROL: {user_message[:30]}")
+        return "PC_CONTROL"
 
     # === 如果改写成功，基于改写结果判断 ===
     if rewrite_context:
@@ -48,13 +54,19 @@ def classify_query(self, user_message: str, rewrite_context: Optional[Dict] = No
     # ========== 第三步：LLM判断（仅对弱关键词或短句） ==========
     if has_weak or len(user_message) < 10:
         router_prompt = f"""
-        判断用户问题是否需要联网搜索才能回答。
-        
-        {"【当前角色信息】" + role_context if role_context else ""}
+        判断用户问题的意图，并输出对应类型。
 
-        【规则】
-        1. 需要联网（输出 REALTIME）：天气、新闻、实时数据、最新动态、推荐、查询具体信息、当前位置相关
-        2. 不需要联网（输出 PERSONAL）：闲聊、个人偏好、历史事实、角色知识、生活常识、打招呼、问候
+        {("【当前角色信息】" + role_context) if role_context else ""}
+
+        【意图类型】
+        1. REALTIME - 需要联网搜索（天气、新闻、实时数据、最新动态、推荐、查询具体信息）
+        2. PERSONAL - 闲聊、个人偏好、历史事实、角色知识、生活常识、打招呼
+        3. PC_CONTROL - 用户要求操作电脑（打开应用、创建文件、操作浏览器、系统控制等）
+
+        【判断规则】
+        - 如果用户要求“打开记事本”、“新建文件”、“启动浏览器”等操作电脑的指令 → PC_CONTROL
+        - 如果用户询问实时信息 → REALTIME
+        - 如果用户只是聊天或问角色设定相关 → PERSONAL
 
         【示例】
         问题：今天北京天气怎么样？
@@ -75,11 +87,17 @@ def classify_query(self, user_message: str, rewrite_context: Optional[Dict] = No
         问题：帮我查一下最新的 iPhone 价格
         输出：REALTIME
 
+        问题：帮我打开记事本
+        输出：PC_CONTROL
+
+        问题：新建一个叫 test.txt 的文件
+        输出：PC_CONTROL
+
         【当前问题】
         {user_message}
 
         【输出格式】
-        只输出一个单词：REALTIME 或 PERSONAL，不要加任何其他文字。
+        只输出一个单词：REALTIME 或 PERSONAL 或 PC_CONTROL，不要加任何其他文字。
         """
         try:
             result = self.tool_adapter.chat_with_tools(
@@ -97,6 +115,8 @@ def classify_query(self, user_message: str, rewrite_context: Optional[Dict] = No
                 return "REALTIME"
             elif content == "PERSONAL":
                 return "PERSONAL"
+            elif content == "PC_CONTROL":
+                return "PC_CONTROL"
             else:
                 # 降级：如果输出不标准，根据是否有弱关键词决定
                 if MEMORY_DEBUG:

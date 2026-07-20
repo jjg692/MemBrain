@@ -53,51 +53,55 @@ async def startup():
 def l3_active_push_task():
     """主动推送 L3 信息给在线单聊用户（群聊不触发）"""
     import json
+    import asyncio
+
     while True:
         time.sleep(L3_PUSH_INTERVAL)
         try:
-            # 获取所有在线单聊连接
             conns = single_ws_manager.get_all()
             if not conns:
                 print("[L3 推送] 没有在线单聊连接，跳过")
                 continue
 
-            loop = asyncio.get_event_loop()
-            # 针对活跃用户（可扩展）
-            user_ids = ["web_user", "default_user"]
-            pushed = 0
-            for user_id in user_ids:
-                l3_items = initializer.l3_manager.get_pending_shares(user_id, n=3)
-                if not l3_items:
-                    continue
-                # 构建菜单消息
-                lines = ["【今日推荐】"]
-                for item in l3_items:
-                    info = json.loads(item["content"])
-                    lines.append(f"• {info['title']}")
-                menu_msg = "\n".join(lines)
+            async def push_to_connections():
+                user_ids = ["web_user", "default_user"]
+                pushed = 0
+                for user_id in user_ids:
+                    l3_items = initializer.l3_manager.get_pending_shares(user_id, n=3)
+                    if not l3_items:
+                        continue
+                    
+                    lines = ["【B站热门视频】"]
+                    for item in l3_items:
+                        info = json.loads(item["content"])
+                        title = info.get('title', '')
+                        url = info.get('url', '')  # 获取 URL
+                        
+                        if url:
+                            lines.append(f"• {title}\n  🔗 {url}")  # 带链接
+                        else:
+                            lines.append(f"• {title}")
+                    
+                    menu_msg = "\n".join(lines)
 
-                # 标记已分享
-                for item in l3_items:
-                    initializer.l3_manager.mark_shared(user_id, item["id"])
+                    for item in l3_items:
+                        initializer.l3_manager.mark_shared(user_id, item["id"])
 
-                # 发送给所有在线连接
-                for ws in conns:
-                    try:
-                        asyncio.run_coroutine_threadsafe(
-                            ws.send_text(json.dumps({
+                    for ws in conns:
+                        try:
+                            await ws.send_text(json.dumps({
                                 "type": "system",
                                 "content": menu_msg,
                                 "from_l3": True
-                            })),
-                            loop
-                        )
-                        pushed += 1
-                    except Exception as e:
-                        print(f"[L3 推送] 发送失败: {e}")
+                            }))
+                            pushed += 1
+                        except Exception as e:
+                            print(f"[L3 推送] 发送失败: {e}")
+                
+                if pushed > 0:
+                    print(f"[L3 推送] 已向 {pushed} 个连接推送")
 
-            if pushed > 0:
-                print(f"[L3 推送] 已向 {pushed} 个连接推送")
+            asyncio.run(push_to_connections())
 
         except Exception as e:
             print(f"[L3 推送] 异常: {e}")

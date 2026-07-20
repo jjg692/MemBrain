@@ -58,8 +58,7 @@ MEMORY_DEBUG = True
 # 在 config.py 末尾追加
 RSS_FEEDS = [
     "https://rsshub.app/bilibili/ranking/0/3",  # B站热门
-    "https://rsshub.app/weibo/search/technology",  # 科技微博
     # 用户可自行配置
 ]
 L3_UPDATE_INTERVAL = 1800  # 30分钟
-L3_PUSH_INTERVAL = 30
+L3_PUSH_INTERVAL = 10

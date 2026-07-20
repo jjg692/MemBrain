@@ -11,7 +11,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
 from core.adapters import OllamaAdapter
-from core.tools import search_web
+from core.tools import search_web, control_pc
 from core.state import AgentState
 from core.memory import MemoryManager
 from agent.router import classify_query
@@ -95,7 +95,7 @@ class LangGraphMemoryAgent:
 
         # 添加节点
         workflow.add_node("agent", self._agent_node)
-        workflow.add_node("tools", ToolNode([search_web]))
+        workflow.add_node("tools", ToolNode([search_web, control_pc]))
         workflow.add_node("handle_result", self._handle_result_node)
 
         # 设置入口
@@ -357,7 +357,32 @@ class LangGraphMemoryAgent:
         log_router(f"问题类型: {query_type}")
 
         # ========== 分流处理 ==========
-        if query_type == "REALTIME":
+        if query_type == "PC_CONTROL":
+            from core.pc_control import execute_pc_task
+            
+            websocket = state.get("_websocket")
+            user_id = state.get("user_id", "default_user")
+            iteration = state.get("iteration", 0)
+            image = state.get("image", None)
+            
+            log_router("PC 控制指令，直接执行")
+            
+            # 同步执行任务（阻塞但简单可靠）
+            result_text = execute_pc_task(user_message)
+            
+            # 构建回复
+            if "成功" in result_text or "已打开" in result_text or "完成" in result_text:
+                reply = f"执行完成！{result_text}"
+            else:
+                reply = f"呜呜…好像出了点问题……{result_text}"
+            
+            return {
+                "messages": [{"role": "assistant", "content": reply}],
+                "iteration": iteration + 1,
+                "image": image,
+                "query_type": "PC_CONTROL"
+            }
+        elif query_type == "REALTIME":
             log_router("实时信息，直接走搜索")
             result = force_search(self, user_message, state)
             result["query_type"] = "REALTIME"
@@ -482,12 +507,6 @@ class LangGraphMemoryAgent:
                         self.conversation_history[user_id].append({"role": "assistant", "content": assistant_part})
             if MEMORY_DEBUG:
                     print(f"[Graph] 加载历史: {len(self.conversation_history[user_id])} 条消息")
-
-
-
-
-
-
 
             # === 触发模糊化（每次对话启动时检查旧记忆） ===
             try:

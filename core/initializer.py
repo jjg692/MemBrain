@@ -20,6 +20,9 @@ class AppInitializer:
         
         # 1. 记忆系统
         self.memory = SimpleMemory(path=CHROMA_DB_PATH)
+                
+        # 1.5. L3 信息池
+        self.l3_manager = L3Manager(self.memory, OllamaAdapter(model=TOOL_LLM_MODEL))
         
         # 2. AgentFactory
         self.agent_factory = self._create_agent_factory()
@@ -28,9 +31,7 @@ class AppInitializer:
         self.room_manager = RoomManager()
         self.message_bus = MessageBus()
         self.role_pool = RoleInstancePool()
-        
-        # 4. L3 信息池
-        self.l3_manager = L3Manager(self.memory, OllamaAdapter(model=TOOL_LLM_MODEL))
+
     
     def _create_agent_factory(self):
         class AgentFactory:
@@ -91,22 +92,29 @@ class AppInitializer:
         import time
         import threading
         from core.config import L3_UPDATE_INTERVAL
-        
+
         l3_manager = self.l3_manager
         memory = self.memory
-        
+
         def background_task():
             active_users = ["web_user", "default_user"]
             for user_id in active_users:
+                # 从 L4 获取兴趣关键词
                 facts = memory.get_facts(user_id, n=5)
                 interests = []
                 for f in facts:
                     doc = f["document"]
                     if "喜欢" in doc or "偏好" in doc:
                         interests.append(doc[:20])
+                
+                # ===== 新增：没有兴趣时使用默认关键词 =====
+                if not interests:
+                    interests = ["热门新闻", "今日推荐", "科技资讯", "娱乐热点"]
+                    print(f"[L3] 用户 {user_id} 无兴趣关键词，使用默认关键词")
+                
                 if interests:
                     l3_manager.update_for_user(user_id, interests)
-        
+
         def scheduler():
             while True:
                 try:
@@ -114,7 +122,7 @@ class AppInitializer:
                 except Exception as e:
                     print(f"[L3] 后台任务异常: {e}")
                 time.sleep(L3_UPDATE_INTERVAL)
-        
+
         thread = threading.Thread(target=scheduler, daemon=True)
         thread.start()
         print("[启动] L3 主动信息池后台任务已启动")

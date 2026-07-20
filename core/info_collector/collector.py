@@ -14,7 +14,7 @@ def fetch_rss(user_id: str) -> List[InfoItem]:
                 items.append(InfoItem(
                     id=f"{user_id}_{uuid.uuid4().hex[:8]}",
                     user_id=user_id,
-                    title=entry.get('title', ''),
+                    title=entry.get('title', ''),  
                     content=entry.get('summary', '') or entry.get('description', ''),
                     source='rss',
                     url=entry.get('link')

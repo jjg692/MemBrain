@@ -4,6 +4,7 @@ import requests
 from langchain_core.tools import tool
 
 from core.config import BAIDU_API_KEY
+from core.pc_control import execute_pc_task
 
 
 # ================== 工具定义（Function Calling） ==================
@@ -66,3 +67,9 @@ def search_web(query: str) -> str:
         query: 搜索关键词
     """
     return search_baidu_api(query)  # 直接调用，不再从 web_app 导入
+
+
+@tool
+def control_pc(task: str) -> str:
+    """执行 Windows 自动化任务（打开应用、操作浏览器、新建文件等）"""
+    return execute_pc_task(task)
