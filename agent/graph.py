@@ -38,7 +38,8 @@ class LangGraphMemoryAgent:
     - 长期记忆：LLM 生成的摘要 + 情绪标签
     """
 
-    def __init__(self, memory, llm_model: str = "qwen3.5:9b", tool_llm_model: str = "qwen2.5:7b", system_prompt=None, tool_adapter=None, main_adapter=None):
+    def __init__(self, memory, llm_model: str = "qwen3.5:9b", tool_llm_model: str = "qwen2.5:7b", 
+                 system_prompt=None, tool_adapter=None, main_adapter=None, l3_manager=None):
         """
         初始化 Agent
 
@@ -54,6 +55,7 @@ class LangGraphMemoryAgent:
         self.llm_model = llm_model
         self.tool_llm_model = tool_llm_model
         self.system_prompt = system_prompt
+        self.l3_manager = l3_manager
 
         # ========== 初始化适配器 ==========
         if tool_adapter is None:

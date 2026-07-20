@@ -6,3 +6,4 @@ chromadb/
 .idea/
 .vscode/
 ai_agent.py
+rubbish/
