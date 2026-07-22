@@ -119,12 +119,11 @@ class FactArbitrator:
 请判断新事实与已有事实的冲突关系。"""
 
         try:
-            result = self.tool_adapter.chat_with_tools(
+            result = self.tool_adapter.chat(
                 messages=[
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": user_content}
-                ],
-                tools=None
+                ]
             )
             content = result.get("content", "")
 

@@ -57,12 +57,11 @@ def extract_role_facts(role_prompt: str, tool_adapter) -> List[Dict]:
     content = ""  # 初始化
     try:
         prompt = ROLE_FACT_PROMPT.format(role_prompt=role_prompt)
-        result = tool_adapter.chat_with_tools(
+        result = tool_adapter.chat(
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": "请提取该角色的事实信息。"}
-            ],
-            tools=None
+            ]
         )
         content = result.get("content", "")
 

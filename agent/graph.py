@@ -1,4 +1,3 @@
-# agent/graph.py
 """
 LangGraph Memory Agent - 核心类
 负责构建 LangGraph 图、管理对话循环、协调各处理器
@@ -210,12 +209,11 @@ class LangGraphMemoryAgent:
         只输出 JSON，不要其他内容。
         """
         try:
-            result = self.tool_adapter.chat_with_tools(
+            result = self.tool_adapter.chat(
                 messages=[
                     {"role": "system", "content": rewrite_prompt},
                     {"role": "user", "content": f"请改写这个查询：{user_message}"}  # ← 新增
-                ],
-                tools=None
+                ]
             )
             import json, re
             content = result.get("content", "")
@@ -277,17 +275,14 @@ class LangGraphMemoryAgent:
         """
         Agent 节点：路由分类 + 分流执行
 
-        这是 LangGraph 图的入口节点，负责：
-        1. 检测“联网搜索”关键词（强制走搜索）
-        2. 调用路由器分类（PERSONAL / REALTIME）
-        3. 根据类型调用对应的处理器
+        自治路由：删除所有硬编码分支，统一走 PERSONAL 分支，由 LLM 自主决策。
         """
         _start = time.time()
         messages = state["messages"]
         last_msg = messages[-1] if messages else None
         user_message = last_msg.content if last_msg and hasattr(last_msg, 'content') else ""
 
-                # ========== 查询改写（所有消息都过） ==========
+        # ========== 查询改写 ==========
         rewrite_result = self._rewrite_query(user_message, state)
         status = rewrite_result.get("status", "failed")
         
@@ -300,7 +295,6 @@ class LangGraphMemoryAgent:
         elif status == "multiple":
             candidates = rewrite_result.get("candidates", [])
             log_debug("Agent", f"查询改写多候选: {candidates}")
-            # 生成询问回复，让用户选择
             ask_prompt = f"""
             用户使用了指代词，可能指向以下多个实体：
             {', '.join(candidates)}
@@ -308,12 +302,11 @@ class LangGraphMemoryAgent:
             请生成一段友好的、符合角色人设的回复，向用户确认具体是指哪一个。
             列出所有候选实体，让用户从中选择。
             """
-            ask_result = self.tool_adapter.chat_with_tools(
-                 messages=[
+            ask_result = self.tool_adapter.chat(
+                messages=[
                     {"role": "system", "content": ask_prompt},
                     {"role": "user", "content": f"用户说的'那个'可能指代以下实体：{', '.join(candidates)}，请生成询问回复。"}
-                ],
-                tools=None
+                ]
             )
             reply = ask_result.get("content", f"呐呐～你说的'那个'是指 {', '.join(candidates)} 中的哪一个呢？")
             user_id = state.get("user_id", "default_user")
@@ -321,84 +314,22 @@ class LangGraphMemoryAgent:
                 self.conversation_history[user_id] = []
             self.conversation_history[user_id].append({"role": "user", "content": user_message})
             self.conversation_history[user_id].append({"role": "assistant", "content": reply})
-            # 直接返回询问，不继续路由
             return {
                 "messages": [{"role": "assistant", "content": reply}],
                 "iteration": state.get("iteration", 0) + 1,
                 "image": state.get("image", None),
                 "query_type": "PERSONAL"
             }
-        # status == "failed" 时，保持原问题不变，继续走路由
-        # =====================================================
 
         log_debug("Agent", f"收到用户消息: {user_message[:50]}...")
         log_time("Agent节点开始", _start)
 
-        # ========== 强制搜索关键词检测 ==========
-        # 用户明确要求联网搜索时，绕过路由分类
-        if "联网搜索" in user_message:
-            log_router("检测到'联网搜索'关键词，强制走搜索")
-            result = force_search(self, user_message, state)
-            result["query_type"] = "REALTIME"
-            return result
-
-        # ========== 路由分类 ==========
-        # 给 router 带上角色别名信息
-        role_alias_hint = ""
-        try:
-            role_facts = self.memory.get_role_facts("kasumi")
-            identity_fact = next((f for f in role_facts if "别号" in f or "别称" in f), role_facts[0] if role_facts else "")
-            if identity_fact:
-                role_alias_hint = f"当前角色名称：户山香澄。{identity_fact}"
-        except Exception as e:
-            role_alias_hint = ""
-
-        query_type = classify_query(self, user_message, rewrite_context=rewrite_result, role_context=role_alias_hint)
-        log_router(f"问题类型: {query_type}")
-
-        # ========== 分流处理 ==========
-        if query_type == "PC_CONTROL":
-            from core.pc_control import execute_pc_task
-            
-            websocket = state.get("_websocket")
-            user_id = state.get("user_id", "default_user")
-            iteration = state.get("iteration", 0)
-            image = state.get("image", None)
-            
-            log_router("PC 控制指令，直接执行")
-            
-            # 同步执行任务（阻塞但简单可靠）
-            result_text = execute_pc_task(user_message)
-            
-            # 构建回复
-            if "成功" in result_text or "已打开" in result_text or "完成" in result_text:
-                reply = f"执行完成！{result_text}"
-            else:
-                reply = f"呜呜…好像出了点问题……{result_text}"
-            
-            return {
-                "messages": [{"role": "assistant", "content": reply}],
-                "iteration": iteration + 1,
-                "image": image,
-                "query_type": "PC_CONTROL"
-            }
-        elif query_type == "REALTIME":
-            log_router("实时信息，直接走搜索")
-            result = force_search(self, user_message, state)
-            result["query_type"] = "REALTIME"
-            return result
-
-        elif query_type == "PERSONAL":
-            log_router("个人闲聊，只走记忆")
-            result = handle_personal(self, user_message, state, role_id="kasumi")
-            result["query_type"] = "PERSONAL"
-            return result
-
-        else:
-            log_router("无类型，直接走搜索")
-            result = force_search(self, user_message, state)
-            result["query_type"] = "REALTIME"
-            return result
+        # ========== 自治路由：全部走 PERSONAL ==========
+        # 不再需要 router 判断，直接让 LLM 通过 handle_personal 中的工具调用自主决策
+        log_router("自治路由：全部走 PERSONAL (LLM 自主决策)")
+        result = handle_personal(self, user_message, state, role_id="kasumi")
+        result["query_type"] = "PERSONAL"
+        return result
 
     def _handle_result_node(self, state: AgentState):
         """处理搜索结果，生成最终回复（不经过路由）"""
@@ -438,19 +369,6 @@ class LangGraphMemoryAgent:
         _start = time.time()
         msgs = messages.copy()
 
-        # 如果启用搜索兜底，在 system prompt 中加入搜索权限
-        if enable_search_fallback:
-            for msg in msgs:
-                if msg.get("role") == "system":
-                    msg["content"] += """
-
-    【搜索工具权限】
-    - 如果你认为自己无法回答用户的问题，或者问题需要实时信息（天气、新闻、推荐、评分等），你可以触发搜索。
-    - 当你决定需要搜索时，在回复的开头输出：[SEARCH] 搜索关键词
-    - 如果你能回答，请正常回复，不要输出 [SEARCH] 标记。
-    """
-                    break
-
         # 处理图片输入
         if image:
             image_data = re.sub(r'^data:image/.+;base64,', '', image)
@@ -462,22 +380,6 @@ class LangGraphMemoryAgent:
         try:
             result = self.main_adapter.chat(messages=msgs)
             content = result.get("content", "")
-            
-            # 检测是否触发了搜索
-            if enable_search_fallback and "[SEARCH]" in content:
-                match = re.search(r'\[SEARCH\]\s*(.+)', content)
-                if match:
-                    search_query = match.group(1).strip()
-                    log_router(f"主模型决定搜索: {search_query}")
-                    # 触发搜索
-                    from agent.handlers.realtime import force_search
-                    # 构造 state 用于 force_search
-                    state = {"user_id": "default_user", "iteration": 0}
-                    search_result = force_search(self, search_query, state)
-                    # 从搜索结果中提取回复
-                    # force_search 返回的是 {"messages": [...], ...}
-                    # 需要提取出搜索结果并重新生成回复
-                    return self._handle_search_result(search_result, msgs)
             
             log_time("主模型生成回复", _start)
             return content

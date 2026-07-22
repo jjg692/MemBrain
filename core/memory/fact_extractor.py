@@ -99,12 +99,11 @@ def extract_facts(user_msg: str, assistant_msg: str, tool_adapter) -> List[Dict]
             user_msg=safe_user_msg,
             assistant_msg=safe_assistant_msg
         )
-        result = tool_adapter.chat_with_tools(
+        result = tool_adapter.chat(
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": f"【用户说】：{user_msg}\n【助手说】：{assistant_msg}"}
-            ],
-            tools=None
+            ]
         )
         content = result.get("content", "")
         print(f"事实抽取器的原始输出：{result}")

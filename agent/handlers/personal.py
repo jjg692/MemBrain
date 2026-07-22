@@ -2,6 +2,7 @@
 PERSONAL 分支处理器
 - 接入混合检索（L2 + L4）
 - 事实优先注入
+- 自治路由：LLM 通过工具调用自主决策
 """
 import time
 from datetime import datetime
@@ -9,10 +10,11 @@ from core.logger import log_time, log_debug, log_router
 from core.config import MEMORY_DEBUG
 from typing import Optional
 from agent.handlers.realtime import force_search
+from core.tools import SEARCH_TOOL_OLLAMA, CONTROL_PC_TOOL_OLLAMA
 
 
 def handle_personal(self, user_message: str, state: dict, role_id: Optional[str] = None) -> dict:
-    """PERSONAL 分支：记忆检索 + 主模型生成"""
+    """PERSONAL 分支：记忆检索 + LLM 自主决策（带工具调用）"""
     _start = time.time()
     log_debug("PERSONAL", f"开始处理: {user_message[:30]}...")
     
@@ -34,7 +36,6 @@ def handle_personal(self, user_message: str, state: dict, role_id: Optional[str]
     memory_context = retrieval_result.get("context", "")
     
     log_debug("PERSONAL", f"检索到: {len(fact_texts)} 条事实, {len(short_term_texts)} 条短期记忆")
-    # ===== 新增详细打印 =====
     log_debug("PERSONAL", "事实详情:")
     for fact in fact_texts:
         log_debug("PERSONAL", f"  - {fact}")
@@ -42,7 +43,7 @@ def handle_personal(self, user_message: str, state: dict, role_id: Optional[str]
     for mem in short_term_texts:
         log_debug("PERSONAL", f"  - {mem}")
 
-    # ========== 构建 System Prompt（事实优先） ==========
+    # ========== 构建 System Prompt（含工具权限） ==========
     full_system_prompt = f"""{self.system_prompt}
 
     【当前日期】{current_date}
@@ -56,13 +57,24 @@ def handle_personal(self, user_message: str, state: dict, role_id: Optional[str]
     - “我”指代香澄本人。
     - 当表达喜欢时，应使用“我喜欢你”，而不是“我喜欢户山香澄”。
 
+    【可用工具】
+    你拥有以下工具，可以在需要时自主调用：
+    1. search_web: 搜索实时信息（天气、新闻、股价、最新动态等）
+    2. control_pc: 操作电脑（打开应用、浏览器、创建文件等）
+
+    【工具使用决策原则】
+    - 如果用户需要实时数据（天气、新闻、股价、最新消息）→ 调用 search_web
+    - 如果用户要求操作电脑（打开记事本、打开浏览器、新建文件）→ 调用 control_pc
+    - 如果用户问的是角色知识、闲聊或你确定能回答的问题 → 不调用工具，直接回答
+    - 你可以结合上下文自主决定是否调用工具
+
     """
     
     # 事实部分（L4）
     if fact_texts:
         full_system_prompt += "【关于你的事实】\n" + "\n".join(f"- {f}" for f in fact_texts) + "\n\n"
 
-    # 新增：L5 角色事实
+    # L5 角色事实
     role_facts = retrieval_result.get("role_facts", [])
     if role_facts:
         full_system_prompt += "【关于我】\n" + "\n".join(f"- {f}" for f in role_facts) + "\n\n"
@@ -87,8 +99,34 @@ def handle_personal(self, user_message: str, state: dict, role_id: Optional[str]
     
     chat_messages.append({"role": "user", "content": user_message})
 
-    # ========== 4. 调用主模型生成回复 ==========
-    final_reply = self._generate_with_main_model(chat_messages, image, enable_search_fallback=True)
+    # ========== 调用主模型，带工具调用能力 ==========
+    tools = [SEARCH_TOOL_OLLAMA, CONTROL_PC_TOOL_OLLAMA]
+    result = self.main_adapter.chat_with_tools(
+        messages=chat_messages,
+        tools=tools,
+        think=False
+    )
+    
+    tool_calls = result.get("tool_calls", [])
+    
+    # 如果 LLM 决定调用工具 → 返回 tool_calls，让 LangGraph 路由到 tools 节点
+    if tool_calls:
+        log_debug("PERSONAL", f"LLM 决定调用工具: {tool_calls}")
+        return {
+            "messages": [{"role": "assistant", "content": "", "tool_calls": tool_calls}],
+            "iteration": iteration + 1,
+            "image": image,
+            "query_type": "PERSONAL"
+        }
+    
+    # LLM 直接回答
+    final_reply = result.get("content", "啊咧？香澄还没想好怎么回答呢…")
+    
+    # 更新内存上下文
+    if user_id not in self.conversation_history:
+        self.conversation_history[user_id] = []
+    self.conversation_history[user_id].append({"role": "user", "content": user_message})
+    self.conversation_history[user_id].append({"role": "assistant", "content": final_reply})
 
     log_time("PERSONAL 处理完成", _start)
     return {

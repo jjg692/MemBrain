@@ -27,6 +27,25 @@ SEARCH_TOOL_OLLAMA = {
     }
 }
 
+# 2. PC 控制工具定义（Ollama 格式）
+CONTROL_PC_TOOL_OLLAMA = {
+    "type": "function",
+    "function": {
+        "name": "control_pc",
+        "description": "执行 Windows 自动化任务，如打开应用、操作浏览器、新建文件等。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "用自然语言描述要执行的 PC 操作任务，例如 '打开记事本' 或 '在浏览器中搜索天气'。"
+                }
+            },
+            "required": ["task"]
+        }
+    }
+}
+
 
 # ================== 搜索 API ==================
 def search_baidu_api(query: str, max_results: int = 3) -> str:

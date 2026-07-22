@@ -66,11 +66,10 @@ class MemoryManager:
         只输出一个数字（0.0-1.0），不要其他内容。"""
         
         try:
-            result = self.tool_adapter.chat_with_tools(
+            result = self.tool_adapter.chat(
                 messages = [
                     {"role": "system", "content": prompt},
-                    {"role": "user", "content": "请根据上述标准输出一个数字分数。"}],
-                tools=None
+                    {"role": "user", "content": "请根据上述标准输出一个数字分数。"}]
             )
             content = result.get("content", "").strip()
             import re
@@ -100,12 +99,11 @@ class MemoryManager:
                 return ""
             
             prompt = f"请用一句话总结以下对话的核心内容：\n{text}"
-            result = self.tool_adapter.chat_with_tools(
+            result = self.tool_adapter.chat(
                 messages=[
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": text}
-                ],
-                tools=None
+                ]
             )
             summary = result.get("content", "").strip()
             if not summary:

@@ -16,9 +16,8 @@ def filter_by_llm(items: List[InfoItem], user_interests: List[str], tool_adapter
 输出格式：只返回数字序号（如 1,3,5），表示相关度高的信息。如果没有，输出 "无"。
 """
     try:
-        result = tool_adapter.chat_with_tools(
-            messages=[{"role": "system", "content": prompt}],
-            tools=None
+        result = tool_adapter.chat(
+            messages=[{"role": "system", "content": prompt}]
         )
         content = result.get("content", "").strip()
         if content == "无" or not content:
