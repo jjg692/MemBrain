@@ -32,6 +32,17 @@ initializer = AppInitializer(system_prompt, API_BASE)
 # 2. 创建 FastAPI app
 app = FastAPI(title="MemBrain", version="v0.0.1-缝合版")
 
+# ================== 后台管理模块 ==================
+from api import admin
+app.include_router(admin.router)
+
+# 注入依赖（从 initializer 中获取）
+admin.memory = initializer.memory
+admin.agent_factory = initializer.agent_factory
+admin.room_manager = initializer.room_manager
+admin.role_pool = initializer.role_pool
+admin.l3_manager = initializer.l3_manager
+
 # 3. 挂载静态文件
 static_dir = Path(__file__).parent / "static"
 static_dir.mkdir(exist_ok=True)

@@ -18,6 +18,8 @@ from agent.handlers import handle_personal, force_search, handle_result_node
 from core.logger import log_time, log_debug, log_router
 from core.config import MEMORY_CONTEXT_MAX_ROUNDS, MEMORY_DEBUG
 import ast
+from core.emotion import EmotionState, AffectionState
+import json
 
 
 class LangGraphMemoryAgent:
@@ -496,3 +498,95 @@ class LangGraphMemoryAgent:
         
         if MEMORY_DEBUG:
             print(f"[Graph] L1 压缩完成: 原 {len(history)} 条 -> {len(self.conversation_history[user_id])} 条")
+
+    def _get_emotion_state(self, user_id: str) -> Optional[EmotionState]:
+        """从 L4 事实层加载最近的情感状态"""
+        from core.emotion import EmotionState
+        try:
+            results = self.memory.search(
+                query="情感状态",
+                user_id=user_id,
+                threshold=0.3,
+                n_results=1,
+                where={"type": "emotion"}
+            )
+            if results and results["results"]:
+                item = results["results"][0]
+                meta = item.get("metadata", {})
+                return EmotionState(
+                    primary=meta.get("primary", "neutral"),
+                    intensity=float(meta.get("intensity", 0.5)),
+                    valence=float(meta.get("valence", 0.0)),
+                    description=meta.get("description", "")
+                )
+        except Exception as e:
+            log_debug("情感", f"加载失败: {e}")
+        return None
+
+    def _save_emotion_state(self, user_id: str, emotion: EmotionState):
+        """将情感状态存入 L4 事实层"""
+        try:
+            # 删除旧的情感状态（避免重复）
+            existing = self.memory.collection.get(
+                where={"$and": [{"user_id": user_id}, {"type": "emotion"}]}
+            )
+            if existing and existing["ids"]:
+                self.memory.collection.delete(ids=existing["ids"])
+            self.memory.add_with_title(
+                title=f"情感状态_{user_id}",
+                content=f"{emotion.primary} ({emotion.intensity:.2f})",
+                user_id=user_id,
+                meta={
+                    "type": "emotion",
+                    "primary": emotion.primary,
+                    "intensity": emotion.intensity,
+                    "valence": emotion.valence,
+                    "description": emotion.description,
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+        except Exception as e:
+            log_debug("情感", f"保存失败: {e}")
+
+
+    def _get_affection_state(self, user_id: str, role_id: str) -> Optional[AffectionState]:
+        """从 L4 加载好感度"""
+        try:
+            results = self.memory.search(
+                query="",
+                user_id=user_id,
+                role_id=role_id,
+                threshold=0.3,
+                n_results=1,
+                where={"type": "affection"}
+            )
+            if results and results["results"]:
+                item = results["results"][0]
+                meta = item.get("metadata", {})
+                return AffectionState.from_dict(meta)
+        except Exception:
+            pass
+        return None
+
+    def _save_affection_state(self, user_id: str, role_id: str, affection: AffectionState):
+        """保存好感度"""
+        try:
+            # 删除旧记录
+            existing = self.memory.collection.get(
+                where={"$and": [{"user_id": user_id}, {"role_id": role_id}, {"type": "affection"}]}
+            )
+            if existing and existing["ids"]:
+                self.memory.collection.delete(ids=existing["ids"])
+            self.memory.add_with_title(
+                title=f"好感度_{user_id}_{role_id}",
+                content=json.dumps(affection.to_dict()),
+                user_id=user_id,
+                meta={
+                    "type": "affection",
+                    "role_id": role_id,
+                    **affection.to_dict(),
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+        except Exception as e:
+            log_debug("好感度", f"保存失败: {e}")
