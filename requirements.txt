@@ -1,0 +1,31 @@
+# ================== 核心 Web 框架 ==================
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+websockets==14.1
+python-multipart==0.0.20
+
+# ================== Agent 编排 ==================
+langchain==0.3.15
+langchain-core==0.3.30
+langgraph==0.2.68
+langchain-ollama==0.2.0
+
+# ================== 向量数据库 & 嵌入 ==================
+chromadb==0.5.23
+sentence-transformers==3.3.1
+
+# ================== LLM 客户端 ==================
+ollama==0.4.3
+openai==1.58.1
+
+# ================== 工具函数 ==================
+requests==2.32.3
+python-dotenv==1.0.1
+beautifulsoup4==4.12.3
+
+# ================== 重排序（Cross-Encoder / BGE） ==================
+onnxruntime==1.27.0
+tokenizers==0.19.1
+
+# ================== 检索 ==================
+rank-bm25==0.2.2

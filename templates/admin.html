@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemBrain · 后台管理</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:"PingFang SC","Microsoft YaHei",sans-serif; background:#f0f2f5; color:#333; }
+  header { background:#fff; padding:16px 28px; box-shadow:0 1px 4px rgba(0,0,0,.08); display:flex; align-items:center; gap:16px; }
+  header h1 { font-size:18px; }
+  header a { color:#07c160; text-decoration:none; font-size:13px; margin-left:auto; }
+  .container { max-width:1100px; margin:24px auto; padding:0 20px; }
+  .tabs { display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; }
+  .tab { padding:8px 18px; background:#fff; border-radius:6px; cursor:pointer; font-size:14px; border:1px solid #e0e0e0; }
+  .tab.active { background:#07c160; color:#fff; border-color:#07c160; }
+  .panel { display:none; }
+  .panel.active { display:block; }
+  .card { background:#fff; border-radius:8px; padding:20px; margin-bottom:16px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .card h3 { font-size:15px; margin-bottom:14px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { padding:8px 10px; text-align:left; border-bottom:1px solid #f0f0f0; word-break:break-all; }
+  th { background:#fafafa; color:#666; }
+  button.btn { padding:5px 12px; border:none; border-radius:5px; cursor:pointer; font-size:12px; }
+  .btn-green { background:#07c160; color:#fff; }
+  .btn-gray { background:#eee; color:#333; }
+  .btn-red { background:#ff4d4f; color:#fff; }
+  .btn-blue { background:#1890ff; color:#fff; }
+  input,select,textarea { padding:7px 10px; border:1px solid #ddd; border-radius:5px; font-size:13px; outline:none; width:100%; }
+  textarea { font-family:inherit; resize:vertical; min-height:90px; }
+  .form-row { display:flex; gap:12px; margin-bottom:12px; flex-wrap:wrap; }
+  .form-row > div { flex:1; min-width:180px; }
+  .form-row label { display:block; font-size:12px; color:#666; margin-bottom:5px; }
+  .stat-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:14px; }
+  .stat-box { background:#fafafa; border-radius:8px; padding:16px; text-align:center; }
+  .stat-box .num { font-size:28px; font-weight:700; color:#07c160; }
+  .stat-box .label { font-size:12px; color:#999; margin-top:6px; }
+  .mem-row { padding:8px 0; border-bottom:1px solid #f0f0f0; font-size:13px; }
+  .mem-row .tag { display:inline-block; background:#e6f7ff; color:#1890ff; padding:1px 8px; border-radius:10px; font-size:11px; margin-right:8px; }
+  .config-edit { display:flex; gap:8px; align-items:center; }
+  .config-edit input { flex:1; }
+  .hint { font-size:12px; color:#999; margin-top:8px; }
+  .toast { position:fixed; top:20px; left:50%; transform:translateX(-50%); background:#333; color:#fff; padding:10px 22px; border-radius:6px; font-size:13px; opacity:0; transition:opacity .3s; z-index:999; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧠 MemBrain 后台管理</h1>
+  <a href="/">← 返回聊天</a>
+</header>
+<div class="container">
+  <div class="tabs">
+    <div class="tab active" data-panel="roles">联系人管理</div>
+    <div class="tab" data-panel="memory">记忆查看</div>
+    <div class="tab" data-panel="emotion">情感 / 好感度</div>
+    <div class="tab" data-panel="stats">系统统计</div>
+    <div class="tab" data-panel="config">配置管理</div>
+  </div>
+
+  <!-- ===== 联系人管理 ===== -->
+  <div class="panel active" id="panel-roles">
+    <div class="card">
+      <h3>角色列表</h3>
+      <table id="rolesTable">
+        <thead><tr><th>role_id</th><th>显示名</th><th>默认</th><th>头像</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h3>新建角色</h3>
+      <div class="form-row">
+        <div><label>role_id</label><input id="newRoleId" placeholder="如 saaya"></div>
+        <div><label>显示名称</label><input id="newRoleName" placeholder="如 山吹沙绫"></div>
+        <div><label>描述</label><input id="newRoleDesc" placeholder="角色简介"></div>
+      </div>
+      <label>Prompt 内容</label>
+      <textarea id="newRolePrompt" style="min-height:120px"></textarea>
+      <div style="margin-top:12px"><button class="btn btn-green" onclick="createRole()">创建角色</button></div>
+    </div>
+  </div>
+
+  <!-- ===== 记忆查看 ===== -->
+  <div class="panel" id="panel-memory">
+    <div class="card">
+      <h3>记忆查看</h3>
+      <div class="form-row">
+        <div><label>user_id</label><input id="memUserId" value="default_user"></div>
+        <div><label>role_id</label><input id="memRoleId" value="kasumi"></div>
+        <div><label>层级</label>
+          <select id="memLevel">
+            <option value="">全部</option>
+            <option value="l1">L1 内存上下文</option>
+            <option value="l2">L2 短期记忆</option>
+            <option value="l4">L4 重要事实</option>
+            <option value="l5">L5 角色事实</option>
+          </select>
+        </div>
+        <div style="flex:0 0 auto; display:flex; align-items:flex-end"><button class="btn btn-blue" onclick="loadMemory()">查询</button></div>
+      </div>
+      <div id="memoryResult" style="max-height:500px; overflow-y:auto"></div>
+    </div>
+  </div>
+
+  <!-- ===== 情感 ===== -->
+  <div class="panel" id="panel-emotion">
+    <div class="card">
+      <h3>情感 / 好感度</h3>
+      <div class="form-row">
+        <div><label>user_id</label><input id="emoUserId" value="default_user"></div>
+        <div><label>role_id</label><input id="emoRoleId" value="kasumi"></div>
+        <div style="flex:0 0 auto; display:flex; align-items:flex-end"><button class="btn btn-blue" onclick="loadEmotion()">查询</button></div>
+      </div>
+      <div id="emotionResult"></div>
+    </div>
+  </div>
+
+  <!-- ===== 统计 ===== -->
+  <div class="panel" id="panel-stats">
+    <div class="card">
+      <h3>系统统计</h3>
+      <div class="stat-grid" id="statGrid"></div>
+      <p class="hint" style="margin-top:12px">记忆统计来自 ChromaDB，按 type 计数（L2/L4/L5/L3/情感/好感度）。</p>
+    </div>
+  </div>
+
+  <!-- ===== 配置 ===== -->
+  <div class="panel" id="panel-config">
+    <div class="card">
+      <h3>配置管理（保存即写入 .env）</h3>
+      <table id="configTable">
+        <thead><tr><th>配置项</th><th>说明</th><th>值</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2000); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// ===== Tabs =====
+document.querySelectorAll('.tab').forEach(tab=>{
+  tab.onclick=()=>{
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+    tab.classList.add('active');
+    $('panel-'+tab.dataset.panel).classList.add('active');
+  };
+});
+
+// ===== 联系人管理 =====
+async function loadRoles(){
+  const res=await fetch('/admin/roles'); const json=await res.json();
+  const tbody=document.querySelector('#rolesTable tbody'); tbody.innerHTML='';
+  (json.data||[]).forEach(r=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td>${esc(r.role_id)}</td>
+      <td>${esc(r.display_name)}</td>
+      <td>${r.default?'⭐ 默认':'<button class="btn btn-gray" onclick="setDefault(\''+r.role_id+'\')">设为默认</button>'}</td>
+      <td>${r.avatar?'<img src="'+r.avatar_url+'" style="width:30px;height:30px;border-radius:4px" onerror="this.style.display=\'none\'">':'无'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-blue" onclick="editRolePrompt('${r.role_id}')">编辑 Prompt</button>
+        <button class="btn btn-gray" onclick="document.getElementById('avatarFile_${r.role_id}').click()">传头像</button>
+        <input type="file" id="avatarFile_${r.role_id}" accept="image/*" style="display:none" onchange="uploadAvatar('${r.role_id}', this)">
+        <button class="btn btn-red" onclick="deleteRole('${r.role_id}')">删除</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+async function createRole(){
+  const body={
+    role_id: $('newRoleId').value.trim(),
+    display_name: $('newRoleName').value.trim(),
+    description: $('newRoleDesc').value.trim(),
+    prompt: $('newRolePrompt').value,
+  };
+  if(!body.role_id){toast('role_id 不能为空');return;}
+  const res=await fetch('/admin/roles/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const json=await res.json();
+  toast(json.message); if(json.code===0){ loadRoles(); $('newRoleId').value='';$('newRoleName').value='';$('newRoleDesc').value='';$('newRolePrompt').value=''; }
+}
+
+async function setDefault(roleId){
+  const res=await fetch(`/admin/roles/${roleId}/default`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({default:true})});
+  toast((await res.json()).message); loadRoles();
+}
+
+async function deleteRole(roleId){
+  if(!confirm('确定删除角色 '+roleId+' ？（会删除 Prompt 文件和头像）'))return;
+  const res=await fetch('/admin/roles/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role_id:roleId})});
+  toast((await res.json()).message); loadRoles();
+}
+
+async function editRolePrompt(roleId){
+  // 从 prompt 文件读取当前内容，弹窗修改后保存
+  const res=await fetch(`/admin/roles/${roleId}/prompt`);
+  const json=await res.json();
+  const newText=prompt('请输入新的 Prompt 内容', json.data?.prompt || '');
+  if(newText!==null){
+    savePrompt(roleId, newText);
+  }
+}
+async function savePrompt(roleId, prompt){
+  const res=await fetch('/admin/roles/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role_id:roleId, prompt})});
+  toast((await res.json()).message);
+}
+
+async function uploadAvatar(roleId, input){
+  if(!input.files.length)return;
+  const fd=new FormData(); fd.append('file', input.files[0]);
+  const res=await fetch(`/admin/roles/${roleId}/avatar`,{method:'POST',body:fd});
+  toast((await res.json()).message); loadRoles();
+}
+
+// ===== 记忆查看 =====
+async function loadMemory(){
+  const p=new URLSearchParams({user_id:$('memUserId').value, role_id:$('memRoleId').value, level:$('memLevel').value});
+  const res=await fetch('/admin/memory?'+p); const json=await res.json();
+  const box=$('memoryResult'); box.innerHTML='';
+  const data=json.data||{};
+  const levelLabels={l1:'L1 内存上下文',l2:'L2 短期记忆',l3:'L3 信息池',l4:'L4 重要事实',l5:'L5 角色事实'};
+  for(const lv of ['l1','l2','l3','l4','l5']){
+    if(!data[lv] || !data[lv].length) continue;
+    box.innerHTML += `<div style="margin:14px 0 6px;font-weight:600">${levelLabels[lv]}（${data[lv].length}条）</div>`;
+    data[lv].forEach(item=>{
+      const content = typeof item==='string' ? item : (item.content||item.document||'');
+      const div=document.createElement('div'); div.className='mem-row';
+      div.innerHTML=`<span class="tag">${lv}</span>${esc(content)}`;
+      box.appendChild(div);
+    });
+  }
+  if(!box.innerHTML) box.innerHTML='<p class="hint">没有查询到记忆。</p>';
+}
+
+// ===== 情感 =====
+async function loadEmotion(){
+  const p=new URLSearchParams({user_id:$('emoUserId').value, role_id:$('emoRoleId').value});
+  const res=await fetch('/admin/memory/emotion?'+p); const json=await res.json();
+  const d=json.data||{}; const box=$('emotionResult'); box.innerHTML='';
+  const emo=d.emotion||{};
+  const aff=d.affection||{};
+  box.innerHTML=`
+    <div style="margin-bottom:14px">
+      <h4 style="margin-bottom:8px">情感状态</h4>
+      <p>主要情绪：<b>${esc(emo.primary||'平静')}</b></p>
+      <p>强度：${emo.intensity!=null?emo.intensity:'-'} · 效价：${emo.valence!=null?emo.valence:'-'}</p>
+      <p class="hint">${esc(emo.description||'')}</p>
+    </div>
+    <div>
+      <h4 style="margin-bottom:8px">6 维好感度</h4>
+      ${['liking','trust','familiarity','respect','interest','attachment'].map(k=>{
+        const labels={liking:'喜欢',trust:'信任',familiarity:'熟悉',respect:'尊重',interest:'兴趣',attachment:'依恋'};
+        const v=aff[k]!=null?aff[k]:0.5;
+        return `<div style="margin-bottom:8px">${labels[k]}：<b>${Number(v).toFixed(2)}</b>
+          <div style="background:#eee;border-radius:4px;height:8px;margin-top:4px"><div style="background:#07c160;height:8px;border-radius:4px;width:${(v*100).toFixed(0)}%"></div></div></div>`;
+      }).join('')}
+    </div>`;
+}
+
+// ===== 统计 =====
+async function loadStats(){
+  const res=await fetch('/admin/stats'); const json=await res.json();
+  const d=json.data||{}; const grid=$('statGrid'); grid.innerHTML='';
+  const items=[
+    ['total','总记忆数'],['l2','L2 短期记忆'],['l4','L4 重要事实'],['l5','L5 角色事实'],
+    ['l3','L3 信息池'],['emotion','情感记录'],['affection','好感度记录'],['roles','角色数'],
+  ];
+  items.forEach(([key,label])=>{
+    const div=document.createElement('div'); div.className='stat-box';
+    div.innerHTML=`<div class="num">${d[key]!=null?d[key]:0}</div><div class="label">${label}</div>`;
+    grid.appendChild(div);
+  });
+  const on=d.online||{}; grid.innerHTML+=`<div class="stat-box"><div class="num">${(on.private||0)+(on.room||0)}</div><div class="label">在线用户</div></div>`;
+}
+
+// ===== 配置 =====
+async function loadConfig(){
+  const res=await fetch('/admin/config'); const json=await res.json();
+  const tb=document.querySelector('#configTable tbody'); tb.innerHTML='';
+  (json.data||[]).forEach(c=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td><code>${esc(c.key)}</code></td>
+      <td>${esc(c.desc)}</td>
+      <td><input data-key="${esc(c.key)}" data-type="${c.type}" value="${esc(c.value!=null?c.value:'')}" style="max-width:160px"></td>
+      <td><button class="btn btn-green" onclick="saveConfig(this)">保存</button></td>`;
+    tb.appendChild(tr);
+  });
+}
+async function saveConfig(btn){
+  const tr=btn.closest('tr');
+  const key=tr.querySelector('input').dataset.key;
+  const val=tr.querySelector('input').value;
+  const res=await fetch('/admin/config/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key,value:val})});
+  toast((await res.json()).message);
+}
+
+// ===== 初始化 =====
+loadRoles(); loadStats(); loadConfig();
+setInterval(loadStats, 5000);
+</script>
+</body>
+</html>

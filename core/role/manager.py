@@ -1,0 +1,212 @@
+"""
+角色管理器 - 多角色系统
+- 读取 config/roles.json
+- 每个角色独立 Prompt 文件（role_prompts/role_prompt_{role_id}.txt）
+- 前端角色下拉切换
+- L5 事实在系统启动时按角色一次性加载
+- 支持后台管理增删改查 / 头像 / 默认角色
+"""
+import json
+import shutil
+from dataclasses import dataclass, asdict, field
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from core.config import ROLES_FILE, ROLE_PROMPTS_DIR, AVATARS_DIR, UPLOADS_DIR
+from core.logger import log_info, log_error
+
+
+@dataclass
+class RoleConfig:
+    role_id: str
+    display_name: str = ""
+    prompt_file: str = ""
+    avatar: str = ""
+    default: bool = False
+    description: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+class RoleManager:
+    def __init__(self):
+        self._roles: Dict[str, RoleConfig] = {}
+        self._prompts: Dict[str, str] = {}
+        self._load()
+
+    # ===================== 加载 =====================
+
+    def _load(self):
+        path = Path(ROLES_FILE)
+        if not path.exists():
+            self._roles = {}
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            for item in data.get("roles", []):
+                role = RoleConfig(
+                    role_id=item["role_id"],
+                    display_name=item.get("display_name", item["role_id"]),
+                    prompt_file=item.get("prompt_file", f"role_prompt_{item['role_id']}.txt"),
+                    avatar=item.get("avatar", ""),
+                    default=item.get("default", False),
+                    description=item.get("description", ""),
+                )
+                self._roles[role.role_id] = role
+        except Exception as e:
+            log_error("Role", f"加载 roles.json 失败: {e}")
+
+    def load_prompt(self, role_id: str) -> str:
+        """读取角色的 Prompt 文件（带缓存）"""
+        if role_id in self._prompts:
+            return self._prompts[role_id]
+        role = self._roles.get(role_id)
+        if not role:
+            return ""
+        path = Path(ROLE_PROMPTS_DIR) / role.prompt_file
+        if not path.exists():
+            return ""
+        text = path.read_text(encoding="utf-8").strip()
+        self._prompts[role_id] = text
+        return text
+
+    def reload_prompt(self, role_id: str):
+        """清除提示词缓存（修改后调用）"""
+        self._prompts.pop(role_id, None)
+
+    # ===================== 查询 =====================
+
+    def all_roles(self) -> List[RoleConfig]:
+        return [self._roles[k] for k in self._roles]
+
+    def list_contacts(self) -> List[dict]:
+        items = []
+        for role in self.all_roles():
+            d = role.to_dict()
+            d["has_prompt"] = bool(self.load_prompt(role.role_id))
+            d["avatar_url"] = f"/static/avatars/agents/{role.avatar}" if role.avatar else ""
+            items.append(d)
+        return items
+
+    def get(self, role_id: str) -> Optional[RoleConfig]:
+        return self._roles.get(role_id)
+
+    def get_default_role(self) -> Optional[str]:
+        for r in self.all_roles():
+            if r.default:
+                return r.role_id
+        if self._roles:
+            return next(iter(self._roles))
+        return None
+
+    def get_prompt_file_path(self, role_id: str) -> Path:
+        role = self._roles.get(role_id)
+        fname = role.prompt_file if role and role.prompt_file else f"role_prompt_{role_id}.txt"
+        return Path(ROLE_PROMPTS_DIR) / fname
+
+    # ===================== 写操作（后台管理） =====================
+
+    def _save(self):
+        data = {"roles": [r.to_dict() for r in self.all_roles()]}
+        Path(ROLES_FILE).parent.mkdir(parents=True, exist_ok=True)
+        Path(ROLES_FILE).write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    def create_role(self, role_id: str, display_name: str = "", prompt: str = "",
+                    description: str = "") -> Optional[RoleConfig]:
+        if not role_id or role_id in self._roles:
+            return None
+        role = RoleConfig(
+            role_id=role_id,
+            display_name=display_name or role_id,
+            prompt_file=f"role_prompt_{role_id}.txt",
+            description=description,
+        )
+        # 写入 prompt 文件
+        self._write_prompt_file(role, prompt)
+        self._roles[role_id] = role
+        self._save()
+        return role
+
+    def update_role(self, role_id: str, display_name: str = None, prompt: str = None,
+                    description: str = None, default: bool = None) -> bool:
+        role = self._roles.get(role_id)
+        if not role:
+            return False
+        if display_name is not None:
+            role.display_name = display_name
+        if description is not None:
+            role.description = description
+        if prompt is not None:
+            self._write_prompt_file(role, prompt)
+            self.reload_prompt(role_id)
+        if default is not None and default:
+            for r in self.all_roles():
+                r.default = (r.role_id == role_id)
+        self._save()
+        return True
+
+    def delete_role(self, role_id: str) -> bool:
+        if role_id not in self._roles:
+            return False
+        # 删除 prompt 文件与头像
+        role = self._roles[role_id]
+        pf = self.get_prompt_file_path(role_id)
+        try:
+            if pf.exists():
+                pf.unlink()
+        except Exception:
+            pass
+        if role.avatar:
+            try:
+                av = Path(AVATARS_DIR) / role.avatar
+                if av.exists():
+                    av.unlink()
+            except Exception:
+                pass
+        del self._roles[role_id]
+        self._prompts.pop(role_id, None)
+        self._save()
+        return True
+
+    def set_avatar(self, role_id: str, uploaded_bytes: bytes, filename: str) -> bool:
+        """保存头像并更新角色配置"""
+        role = self._roles.get(role_id)
+        if not role:
+            return False
+        Path(AVATARS_DIR).mkdir(parents=True, exist_ok=True)
+        ext = Path(filename).suffix or ".png"
+        av_name = f"{role_id}{ext}"
+        # 清理旧头像
+        if role.avatar and role.avatar != av_name:
+            old = Path(AVATARS_DIR) / role.avatar
+            try:
+                if old.exists():
+                    old.unlink()
+            except Exception:
+                pass
+        Path(AVATARS_DIR, av_name).write_bytes(uploaded_bytes)
+        role.avatar = av_name
+        self._save()
+        return True
+
+    def delete_avatar(self, role_id: str) -> bool:
+        role = self._roles.get(role_id)
+        if not role or not role.avatar:
+            return False
+        av = Path(AVATARS_DIR) / role.avatar
+        try:
+            if av.exists():
+                av.unlink()
+        except Exception:
+            pass
+        role.avatar = ""
+        self._save()
+        return True
+
+    def _write_prompt_file(self, role: RoleConfig, prompt: str):
+        path = self.get_prompt_file_path(role.role_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(prompt, encoding="utf-8")
