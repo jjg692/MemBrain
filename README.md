@@ -81,7 +81,9 @@ END
 - Python 3.11+
 - Ollama（已拉取主模型 + 工具模型）
 
-> ⚠️ **关于嵌入模型**：项目约定嵌入模型放在 `models/all-MiniLM-L6-v2/`（`sentence-transformers` 格式）。如果该目录存在则**离线直接加载**；如果不存在，代码会回退到联网下载同名模型，或最终降级为 ChromaDB 默认嵌入（`DefaultEmbeddingFunction`）。当前 `models/` 目录为空，请自行放入已下载的模型，或首次运行时让它自动下载（需联网）。
+> ⚠️ **关于嵌入模型**：项目约定嵌入模型放在 `models/all-MiniLM-L6-v2/`（`sentence-transformers` 格式）。如果该目录存在则**离线直接加载**；如果不存在，代码会回退到联网下载同名模型，或最终降级为 ChromaDB 默认嵌入。当前默认 `EMBEDDING_MODE=ollama`（nomic-embed-text，768 维），无需本地模型。
+
+> **关于重排序**：默认使用本地 ONNX 的 **BGE reranker（`BAAI/bge-reranker-v2-m3`）**，对中文/多语言召回的精排效果显著优于旧的 ms-marco（旧模型词表基本不含中文，中文会退化成 `[UNK]`）。模型放在 `models/bge-reranker-v2-m3/`（含 `model.onnx` + `tokenizer.json`）。若未启用或加载失败，会自动回退到旧 ms-marco 或保持向量初步排序。
 
 ### 安装
 
@@ -201,4 +203,7 @@ agent-web-refactor/
 | `MEMORY_SHORT_TERM_MAX_ROUNDS` | L2 轮数 | `50` |
 | `MEMORY_IMPORTANCE_THRESHOLD` | 事实抽取阈值 | `0.6` |
 | `MEMORY_FACT_DECAY_DAYS` | 事实衰减天数 | `90` |
+| `RERANKER_BACKEND` | 重排器后端：`bge`（bge-reranker-v2-m3，中英通用）/ `minilm`（旧 ms-marco）/ 留空自动 | `bge` |
+| `BGE_RERANKER_DIR` / `BGE_RERANKER_ONNX` | BGE 重排器目录与 ONNX 文件名 | `models/bge-reranker-v2-m3` / `model.onnx` |
+| `CROSS_ENCODER_ONNX_PATH` | 旧 ms-marco ONNX 路径（兜底） | `models/ms-marco-MiniLM-L-6-v2/...` |
 | `L3_UPDATE_INTERVAL` / `L3_PUSH_INTERVAL` | ⚠️ 配置项已定义但**当前无代码使用**（L3 未实现） | `7200` / `300` |

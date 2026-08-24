@@ -46,29 +46,40 @@ class OllamaEmbeddingFunction:
         """ChromaDB 要求实现 name()，否则 get_or_create_collection 校验会报错"""
         return f"ollama-{self.model}"
 
-    def embed_query(self, query: str) -> List[float]:
-        """ChromaDB query 时调用：嵌入单个查询串"""
-        return self([query])[0]
-
-    def __call__(self, input: Sequence[str]) -> List[List[float]]:
-        """ChromaDB 调用接口：输入文本列表，输出向量列表"""
-        # 允许传入单个字符串或字符串列表
-        if isinstance(input, str):
-            input = [input]
-        texts = list(input)
+    def _embed_texts(self, texts) -> List[List[float]]:
+        """底层嵌入：texts 为字符串列表，逐条调用 Ollama，返回二维向量列表"""
         embeddings = []
         for t in texts:
             try:
-                resp = self._client.embeddings(model=self.model, prompt=t)
+                resp = self._client.embeddings(model=self.model, prompt=str(t))
                 embedding = resp.get("embedding")
                 if embedding is None and isinstance(resp.get("embeddings"), list):
-                    # 某些 ollama 版本返回 embeddings 字段
                     embedding = resp["embeddings"][0]
                 embeddings.append(list(embedding) if embedding else [0.0] * 384)
             except Exception as e:
                 log_error("Embedding", f"Ollama 嵌入失败: {e}")
                 embeddings.append([0.0] * 384)
         return embeddings
+
+    def embed_query(self, input=None, query=None) -> List[List[float]]:
+        """ChromaDB query 时调用，输入 input=list[str] 或 query=str。
+        返回二维 Embeddings（含一个向量），与 __call__ 契约一致。
+        """
+        if query is not None:
+            texts = [query] if isinstance(query, str) else list(query)
+        elif input is not None:
+            texts = [input] if isinstance(input, str) else list(input)
+        else:
+            texts = [""]
+        return self._embed_texts(texts)
+
+    def __call__(self, input: Sequence[str]) -> List[List[float]]:
+        """ChromaDB 调用接口：输入文本列表，输出向量列表（二维）"""
+        # 允许传入单个字符串或字符串列表
+        if isinstance(input, str):
+            input = [input]
+        texts = list(input)
+        return self._embed_texts(texts)
 
 
 def _local_sentence_transformer() -> Optional[object]:
