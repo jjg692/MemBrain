@@ -9,4 +9,4 @@ static/avatars/agents/*.png
 .env.local
 *.log
 .DS_Store
-".env" 
+.env
