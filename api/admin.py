@@ -126,9 +126,9 @@ def setup_admin(app):
             agent = app.agent_factory.get_agent(user_id, role_id)
             l1 = agent.memory.get_l1(user_id, role_id)
             result["data"]["l1"] = [{"role": m["role"], "content": m["content"]} for m in l1[-n:]]
-        # L3
+        # L3（主动信息池：全局共享，按 type 查询，与存储键 role_id=keyword 对齐）
         if not level or level == "l3":
-            res = mem.get(where({"user_id": user_id}, {"role_id": role_id}, {"type": "l3_info"}), limit=n)
+            res = mem.get(where({"type": "l3_info"}), limit=n)
             result["data"]["l3"] = [
                 {"id": i["id"], "content": i["document"], "meta": i["metadata"]} for i in res["results"]
             ]

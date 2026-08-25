@@ -42,15 +42,16 @@ class L3Collector:
                 content = search_web(kw)
                 if not content or "搜索服务不可用" in content or "降级" in content:
                     # 免费/降级结果也可以存，但跳过明显失败
-                    pass
-                self._store_item(kw, content)
-                new_count += 1
+                    continue
+                if self._store_item(kw, content):
+                    new_count += 1
             except Exception as e:
                 log_error("L3", f"采集[{kw}]失败: {e}")
         return new_count
 
-    def _store_item(self, keyword: str, content: str):
-        """入库一条 L3 信息（带去重：同 keyword 近 N 分钟不重复存）"""
+    def _store_item(self, keyword: str, content: str) -> bool:
+        """入库一条 L3 信息（带去重：同 keyword 内容重复则跳过）。
+        返回 True 表示真正新增了一条。"""
         now = time.time()
         # 简单去重：查最近同类条目，若内容已存在则跳过
         where = self.memory._build_where(
@@ -60,7 +61,7 @@ class L3Collector:
         for it in existing["results"]:
             meta = it.get("metadata", {})
             if meta.get("content_hash") == _hash(content):
-                return  # 重复内容
+                return False  # 重复内容
         doc_id = f"l3_{keyword}_{int(now*1000)}"
         try:
             self.memory.add_with_title(
@@ -78,9 +79,11 @@ class L3Collector:
                 },
                 doc_id=doc_id,
             )
+            return True
         except Exception as e:
             # 暂时性失败(如嵌入服务暂时不可用),记录但不中断循环
             log_error("L3", f"入库失败[{keyword}]: {e}")
+            return False
 
     def start_loop(self, stop_event: threading.Event):
         """后台线程：按 L3_UPDATE_INTERVAL 周期采集"""

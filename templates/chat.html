@@ -163,7 +163,7 @@ function renderContacts(filter='') {
 
   // 私聊分组
   if (filtered.some(c => c.role_id === activeRole)) {
-    list.innerHTML += `<div class="contact-group">私聊</div>`;
+    list.appendChild(groupEl('私聊'));
   }
   filtered.forEach(c => {
     const div = document.createElement('div');
@@ -173,10 +173,23 @@ function renderContacts(filter='') {
     list.appendChild(div);
   });
 
-  // 群聊分组
-  if (filtered.length) list.innerHTML += `<div class="contact-group">群聊</div>`;
-  list.innerHTML += `<div class="contact-item" id="roomListPlaceholder" style="color:#9aa0a6">加载群聊中…</div>`;
+  // 群聊分组 + 占位符（用 createElement 追加，避免 innerHTML+= 重建 DOM 丢掉 onclick）
+  if (filtered.length) list.appendChild(groupEl('群聊'));
+  const ph = document.createElement('div');
+  ph.className = 'contact-item';
+  ph.id = 'roomListPlaceholder';
+  ph.style.color = '#9aa0a6';
+  ph.textContent = '加载群聊中…';
+  list.appendChild(ph);
   loadRoomsIntoList();
+}
+
+// 生成一个分组标题节点（纯 DOM，便于 appendChild）
+function groupEl(text) {
+  const g = document.createElement('div');
+  g.className = 'contact-group';
+  g.textContent = text;
+  return g;
 }
 
 function avatarHTML(c) {
@@ -280,7 +293,8 @@ function appendMessage({role, content, sender}) {
   div.innerHTML = av + `<div class="msg-body"><div class="msg-meta">${isSelf?'我':esc(senderName)}</div><div class="msg-bubble">${esc(content)}</div></div>`;
   $('msgList').appendChild(div); scrollBottom();
 
-  const key = activeType+':'+activeKey;
+  // 缓存键按会话区分：私聊用 (user_id, role_id)，群聊用 room_id
+  const key = activeType==='room' ? 'room:'+activeKey : 'private:'+activeKey+':'+activeRole;
   if (!messagesCache[key]) messagesCache[key]=[];
   messagesCache[key].push({role, content, sender});
 }
@@ -288,7 +302,8 @@ function appendMessage({role, content, sender}) {
 function scrollBottom(){ const l=$('msgList'); l.scrollTop = l.scrollHeight; }
 
 async function loadHistory(roleId) {
-  const key = 'private:default_user';
+  // 缓存键与 appendMessage 保持一致（含 role_id），保证不同角色历史各自隔离
+  const key = 'private:default_user:' + roleId;
   if (messagesCache[key]) {
     messagesCache[key].forEach(m => appendMessageDirect(m));
     scrollBottom(); return;

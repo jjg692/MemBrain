@@ -62,7 +62,7 @@ def render_skill_prompt(data, character, work='', retrieved_at='', sources_desc=
     classic = expr.get('classic_lines') or []
     vp = dec.get('value_priority') or []
     hl = dec.get('hard_limits') or []
-    samples = data.get('sample_dialogues') or [] if isinstance(data, dict) else []
+    samples = (data.get('sample_dialogues') or []) if isinstance(data, dict) else []
     def bul(items):
         if not isinstance(items, list):
             items = [items] if items else []

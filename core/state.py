@@ -15,9 +15,4 @@ class AgentState(TypedDict, total=False):
     role_id: str                            # 角色标识
     image: Optional[str]                    # 可选图片（base64）
     iteration: int                          # 迭代计数（防死循环）
-    system_prompt: Optional[str]            # 构建好的 system prompt
     room_context: Optional[str]             # 群聊 L0 上下文（可选）
-    facts: Optional[List[str]]              # 检索到的 L4 事实
-    role_facts: Optional[List[str]]         # 检索到的 L5 角色事实
-    emotion: Optional[Dict[str, Any]]       # 情感状态
-    affection: Optional[Dict[str, Any]]     # 好感度（6维）
