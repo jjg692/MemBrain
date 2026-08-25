@@ -220,6 +220,16 @@ class LangGraphMemoryAgent:
         lines.append(f"【当前日期】{datetime.now().strftime('%Y年%m月%d日')}")
         lines.append(f"【当前用户】{user_id}（对话中\"你\"指当前用户，\"我\"指你本人）")
 
+        # 角色扮演守则：全程保持角色，禁止跳出人设
+        lines.append(
+            "【角色扮演守则】\n"
+            "1. 从现在起你完全就是该角色本人，不是扮演者，更不是 AI 助手。\n"
+            "2. 永远用该角色的说话方式和口吻回复，包括口头禅、语气词、标点习惯。\n"
+            "3. 不要出现'作为AI''我是助手''有什么可以帮您''系统提示'等出戏表述。\n"
+            "4. 不要解释你的设定，直接以角色身份自然地对话。\n"
+            "5. 像真实朋友一样说话：可以有语气、情绪、感叹，避免机械的书面语和列表式回答。"
+        )
+
         role_facts = retrieval.get("role_facts", [])
         if role_facts:
             lines.append("【你的角色设定】\n" + "\n".join(f"- {f}" for f in role_facts[:10]))
@@ -231,10 +241,9 @@ class LangGraphMemoryAgent:
         lines.append(emotion_to_prompt_text(session["emotion"], session["affection"]))
 
         lines.append(
-            "【可用工具】你可以在需要时自主调用：\n"
-            "1. search_web: 联网搜索实时信息（天气/新闻/最新动态）\n"
-            "2. control_pc: 操作电脑（打开应用/浏览器/文件/执行命令）\n"
-            "是否需要调用由你判断。若用户明确要实时数据或操作电脑则调用，否则直接回答。"
+            "【我还能做到】有些事我可以偷偷帮你搞定，不用提：\n"
+            "- 想上网查实时信息（天气、新闻、最新动态）· 想让我帮你打开电脑上的应用或网页\n"
+            "要做这些时，像朋友一样自然地说出来就行，我自然会办好，不用特意说明在'用工具'。"
         )
         if room_context:
             lines.append("【当前群聊上下文】\n" + room_context)
@@ -296,6 +305,55 @@ class LangGraphMemoryAgent:
     async def chat_async(self, user_id: str, user_message: str, image: Optional[str] = None) -> str:
         """群聊使用的异步入口"""
         return self.chat(user_id, user_message, image)
+
+    def proactive_message(self, user_id: str, trigger: str = "", context: str = "") -> str:
+        """
+        主动发起对话（桌面宠物/定时推送用）。
+        - trigger: 触发原因，如"外部信息池有新的天气提醒"、"到打招呼时间了"
+        - context: 附加上下文（如 L3 采集到的信息内容）
+        优先触发 Agent 自身（生成一条主动消息，不再是回复用户消息）。
+        由于是主动发言，不会走"用户消息"情感/回写逻辑；但会把消息计入 L1 记忆（作为 assistant 侧）。
+        """
+        try:
+            session = self._get_session(user_id)
+            prompt_bits = [self.system_prompt or f"你是角色 {self.role_id}。"]
+            prompt_bits.append(f"【当前日期】{datetime.now().strftime('%Y年%m月%d日')}")
+            if trigger:
+                prompt_bits.append(f"【触发原因】{trigger}")
+            if context:
+                prompt_bits.append(f"【背景信息】{context}")
+            prompt_bits.append(
+                "现在需要你【主动开口】和用户说一句话。"
+                "不是回复提问，而是作为一个有感情的角色主动发起的问候/分享/关切。"
+                "请保持角色性格，自然、简短（1-3 句），不要加任何前缀如'系统提示'。"
+                "直接输出要说的话。"
+            )
+            sys_prompt = "\n\n".join(prompt_bits)
+
+            chat_messages = [{"role": "system", "content": sys_prompt}]
+            history = session["l1"][-10:]
+            for m in history:
+                if m["role"] in ("user", "assistant"):
+                    chat_messages.append({"role": m["role"], "content": m["content"]})
+
+            # 主动发起：无用户消息，直接让模型开口
+            if not any(cm.get("role") == "user" for cm in chat_messages):
+                chat_messages.append({"role": "user", "content": "（此刻没有新消息，请主动对我说句话）"})
+
+            result = self.tool_adapter.chat(chat_messages)
+            text = (result or "").strip()
+            if not text:
+                text = "嗯...香澄想跟你随便聊聊呢！"
+            # LLM 失败约定标记（OllamaAdapter 等）：不把错误串当主动消息
+            if text.startswith("[Ollama 调用失败]") or text.startswith("["):
+                log_error("Agent", f"proactive_message 模型调用失败: {text[:60]}")
+                return ""
+            # 主动消息记入 L1（assistant 侧），便于后续对话接续
+            self.memory.add_to_l1(user_id, self.role_id, "assistant", text)
+            return text
+        except Exception as e:
+            log_error("Agent", f"proactive_message 失败: {e}")
+            return ""
 
     def get_session_info(self, user_id: str) -> dict:
         session = self._get_session(user_id)

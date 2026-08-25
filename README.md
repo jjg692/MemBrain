@@ -26,7 +26,7 @@
 |------|------|------|------|------|
 | **L1** | 内存上下文 | 内存（按 user_id+role_id 隔离） | 50 轮，超限压缩 | 当前会话历史、指代消解 |
 | **L2** | 短期记忆 | ChromaDB `short_term` | 50 轮 FIFO | 跨会话对话原文召回 |
-| **L3** | 主动信息池 | ChromaDB `l3_info` | 预留 | ⚠️ **未实现**：仅有统计计数与配置文件项，无主动采集/推送逻辑 |
+| **L3** | 主动信息池 | ChromaDB `l3_info` | 上限可配 | ✅ **已实现**：周期采集外部实时信息（复用 `search_web`，可配关键词），去重入库；`L3Pusher` 周期扫描未推送条目，调用 Agent **主动发起对话**并推送到私聊 WS |
 | **L4** | 重要事实 | ChromaDB `fact` | 永久（带衰减） | 用户画像，LLM 自动抽取 |
 | **L5** | 角色事实 | ChromaDB `role_fact` | 永久 | 角色设定，仅按 role_id 隔离 |
 
@@ -112,6 +112,20 @@ python web_app.py
 - 聊天界面：`http://localhost:8000/`
 - 后台管理：`http://localhost:8000/admin`
 
+### 🖥️ 桌面宠物（M1 壳）
+
+在浏览器版之上，可通过 pywebview 以"桌面宠物"形态随用：
+
+```bash
+pip install pywebview pystray
+python desktop_pet.py
+```
+
+- 自动拉起后端 `web_app.py`（未运行时），不弹浏览器，直接弹出**无边框置顶窗口**加载聊天页（复用 /ws/chat 全部能力）。
+- 系统托盘：显示 / 隐藏 / 打开聊天 / 打开后台管理 / 退出（退出时一并关闭由它拉起的后端）。
+- 调试可单独启后端：`python desktop_pet.py --backend-only`。
+- 仅启后端、不自动弹浏览器：`MEMBRAIN_NO_BROWSER=1 python web_app.py`。
+
 ---
 
 ## 🔌 API 一览
@@ -187,6 +201,57 @@ agent-web-refactor/
 
 ---
 
+## 🎭 角色 Prompt 生成器（CSP 风格）
+
+参考 [Character_Skill_Producer](https://github.com/qian-gugugaga/Character_Skill_Producer) 实现：
+从多个网站检索角色资料 → LLM **行为蒸馏**（把"设定"提炼成"情境→行为"）→ 生成可加载的 role prompt。
+
+### 数据源（MediaWiki API，自动并行抓取）
+
+| 来源 | 说明 | 可信度 |
+|---|---|---|
+| 萌娘百科 | zh.moegirl.org.cn，二次元角色词条丰富 | 高 |
+| 中文维基 | zh.wikipedia.org | 高 |
+| Fandom | 作品 Wiki（按作品自动选域，中文名可能 missing） | 中 |
+
+### 用法
+
+```bash
+# 生成并打印（需 Ollama 在线，用 TOOL_LLM_MODEL 蒸馏）
+python scripts/generate_role.py "高松灯" --work "BanG Dream! It's MyGO!!!!!"
+
+# 生成并写入角色 prompt（即可被系统加载）
+python scripts/generate_role.py "户山香澄" --work "BanG Dream!" --out role_prompts/role_prompt_kasumi.txt
+
+# 列出数据源
+python scripts/generate_role.py --list-sources
+
+# 调试：把抓到的来源保存为 json
+python scripts/generate_role.py "御坂美琴" --save-source sources_dump.json
+```
+
+### 生成结构（可直接作为系统 role prompt）
+
+角色扮演规则 → 身份卡 → 行为动态（默认/压力/矛盾/面对他人）→ 表达质感（句式/口癖/情绪泄露/经典台词）→ 社会认知 → 决策逻辑（动机/优先级/硬约束）→ 知识边界 → 行为示例 → 诚实边界 → 调研来源。
+
+生成的 `role_prompts/role_prompt_{role_id}.txt` 会被 `RoleManager.load_prompt()` 直接使用（无需改代码）。
+
+### 模块结构
+
+```text
+role_generator/
+├── sources/
+│   ├── base.py        # 统一 MediaWiki API 拉取
+│   ├── moegirl.py     # 萌娘百科 adapter
+│   ├── wikipedia.py   # 中文维基 adapter
+│   ├── fandom.py      # Fandom adapter
+│   └── __init__.py    # 多源并行编排 + 文本合并
+├── distill.py         # LLM 行为蒸馏 + CSP prompt 渲染
+└── __init__.py
+```
+
+---
+
 ## 🔑 环境变量
 
 | 变量 | 说明 | 默认 |
@@ -206,4 +271,8 @@ agent-web-refactor/
 | `RERANKER_BACKEND` | 重排器后端：`bge`（bge-reranker-v2-m3，中英通用）/ `minilm`（旧 ms-marco）/ 留空自动 | `bge` |
 | `BGE_RERANKER_DIR` / `BGE_RERANKER_ONNX` | BGE 重排器目录与 ONNX 文件名 | `models/bge-reranker-v2-m3` / `model.onnx` |
 | `CROSS_ENCODER_ONNX_PATH` | 旧 ms-marco ONNX 路径（兜底） | `models/ms-marco-MiniLM-L-6-v2/...` |
-| `L3_UPDATE_INTERVAL` / `L3_PUSH_INTERVAL` | ⚠️ 配置项已定义但**当前无代码使用**（L3 未实现） | `7200` / `300` |
+| `L3_ENABLED` | 启用 L3 主动信息池（采集+推送） | `false` |
+| `L3_UPDATE_INTERVAL` | L3 采集周期（秒） | `7200` |
+| `L3_PUSH_INTERVAL` | L3 推送/主动开口周期（秒） | `300` |
+| `L3_KEYWORDS` | 采集关键词（逗号分隔） | `天气,今日热点,二次元话题` |
+| `L3_MAX_ITEMS` | L3 池最大条目数 | `200` |

@@ -254,6 +254,9 @@ function connectPrivateWs(roleId) {
     } else if (d.type === 'reply') {
       removeThinking();
       appendMessage({ role:'assistant', content:d.content, sender:roleId });
+    } else if (d.type === 'proactive') {
+      // L3/定时主动消息：Agent 主动开口
+      appendMessage({ role:'assistant', content:d.content, sender:d.role_id || roleId });
     }
   };
 }

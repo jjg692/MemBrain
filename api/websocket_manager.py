@@ -34,6 +34,20 @@ class SingleConnectionManager:
     def get_all(self) -> List[WebSocket]:
         return list(self._connections.values())
 
+    async def push_to_user(self, user_id: str, data: dict):
+        """向在线用户主动推送（用于 L3/定时主动消息）"""
+        ws = self._connections.get(user_id)
+        if ws is None:
+            return False
+        try:
+            await ws.send_json(data)
+            return True
+        except Exception:
+            return False
+
+    def user_ids(self) -> List[str]:
+        return list(self._connections.keys())
+
 
 class RoomConnectionManager:
     """群聊连接：room_id -> set[WebSocket]"""

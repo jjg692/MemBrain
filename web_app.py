@@ -2,6 +2,7 @@
 MemBrain (Refactor) Web 入口
 组装所有模块，启动服务
 """
+import os
 import threading
 from pathlib import Path
 
@@ -57,10 +58,14 @@ async def startup():
     def load_facts():
         initializer.load_all_role_facts()
     threading.Thread(target=load_facts, daemon=True).start()
+    # 启动 L3 主动信息池（外部信息采集 + 主动推送）
+    initializer.start_l3_loops()
     log_info("Startup", "启动完成")
 
 
 if __name__ == "__main__":
     log_info("Startup", f"MemBrain 启动于 http://localhost:{PORT}")
-    threading.Timer(1.5, _open_browser).start()
+    # 桌面宠物壳启动时设置 MEMBRAIN_NO_BROWSER=1（已有独立窗口，不再弹浏览器）
+    if not os.getenv("MEMBRAIN_NO_BROWSER"):
+        threading.Timer(1.5, _open_browser).start()
     uvicorn.run(app, host=HOST, port=PORT, reload=False, log_level="info")

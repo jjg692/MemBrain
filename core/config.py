@@ -33,6 +33,8 @@ PORT = _int(os.getenv("PORT"), 8000)
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen3.5:9b")
 TOOL_LLM_MODEL = os.getenv("TOOL_LLM_MODEL", "qwen2.5:7b")
+# 采样温度（角色扮演：略高有活气；0.0-1.0）
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.85"))
 
 # ===================== 百度搜索 =====================
 BAIDU_API_KEY = os.getenv("BAIDU_API_KEY", "")
@@ -76,9 +78,17 @@ MEMORY_IMPORTANCE_THRESHOLD = float(os.getenv("MEMORY_IMPORTANCE_THRESHOLD", "0.
 MEMORY_FACT_DECAY_DAYS = _int(os.getenv("MEMORY_FACT_DECAY_DAYS"), 90)
 MEMORY_DEBUG = _bool(os.getenv("MEMORY_DEBUG"))
 
-# ===================== L3 =====================
+# ===================== L3 主动信息池 =====================
+# 是否启用 L3 采集/推送
+L3_ENABLED = _bool(os.getenv("L3_ENABLED"))
+# 采集周期（秒）：定时拉取外部信息源
 L3_UPDATE_INTERVAL = _int(os.getenv("L3_UPDATE_INTERVAL"), 7200)
+# 推送周期（秒）：扫描未推送的 L3 条目并让 Agent 主动开口
 L3_PUSH_INTERVAL = _int(os.getenv("L3_PUSH_INTERVAL"), 300)
+# 采集关键词（逗号分隔）
+L3_KEYWORDS = [k.strip() for k in os.getenv("L3_KEYWORDS", "").split(",") if k.strip()]
+# L3 池最大条目数（超出按时间清理，0=不限）
+L3_MAX_ITEMS = _int(os.getenv("L3_MAX_ITEMS"), 200)
 
 # 角色配置
 ROLES_FILE = str(Path(PROJECT_ROOT) / "config" / "roles.json")

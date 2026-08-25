@@ -31,6 +31,11 @@ class OllamaAdapter(LLMAdapter):
     def __init__(self, model: str, host: Optional[str] = None):
         self.model = model
         self._client = OllamaClient(host=host) if host else ollama
+        self.temperature = None  # None=用 Ollama 默认; 由使用方按需设置
+
+    def set_temperature(self, value: Optional[float]):
+        self.temperature = value
+        return self
 
     def _base_params(self, messages, images=None):
         params = {
@@ -39,6 +44,8 @@ class OllamaAdapter(LLMAdapter):
             "stream": False,
             "think": False,
         }
+        if self.temperature is not None:
+            params["temperature"] = self.temperature
         if images:
             # Ollama 图片放在最后一条 user 消息的 images 字段
             for msg in reversed(messages):
