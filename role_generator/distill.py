@@ -86,7 +86,14 @@ def render_skill_prompt(data, character, work='', retrieved_at='', sources_desc=
     if beh.get('default'): L.append('- **默认状态**: ' + str(beh['default']))
     if beh.get('under_pressure'): L.append('- **压力之下**: ' + str(beh['under_pressure']))
     if beh.get('core_conflict'): L.append('- **核心矛盾**: ' + str(beh['core_conflict']))
-    if beh.get('facing_others'): L.append('- **面对不同的人**: ' + str(beh['facing_others']))
+    if beh.get('facing_others'):
+        fo = beh['facing_others']
+        if isinstance(fo, dict):
+            L.append('- **面对不同的人**:')
+            for _name, _desc in fo.items():
+                L.append('  - ' + str(_name) + '：' + str(_desc))
+        else:
+            L.append('- **面对不同的人**: ' + str(fo))
     L.append('')
     L.append('# 表达质感')
     if expr.get('sentence_style'): L.append('- **句式节奏**: ' + str(expr['sentence_style']))

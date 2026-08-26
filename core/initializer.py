@@ -8,9 +8,10 @@
 """
 from typing import Dict, Optional, Tuple
 
-from core.config import LLM_MODEL, TOOL_LLM_MODEL, OLLAMA_HOST, LLM_TEMPERATURE
+from core.config import LLM_MODEL, TOOL_LLM_MODEL, OLLAMA_HOST, LLM_TEMPERATURE, LLM_PROVIDER
 from core.logger import log_info, log_error
 from core.adapters import OllamaAdapter
+from core.llm_manager import LLMManager
 
 from core.memory.vector_store import SimpleMemory
 from core.memory.memory_manager import MemoryManager
@@ -39,6 +40,8 @@ class AgentFactory:
                 role_manager=self.initializer.role_manager,
                 emotion_store=self.initializer.emotion_store,
                 role_id=role_id,
+                llm_adapter=self.initializer.llm_adapter,
+                tool_adapter=self.initializer.tool_adapter,
                 message_bus=self.initializer.message_bus,
             )
             self._cache[key] = agent
@@ -51,10 +54,15 @@ class AgentFactory:
 
 class AppInitializer:
     def __init__(self):
+        # LLM 提供商管理（本地 Ollama / 远程 OpenAI 兼容）
+        self.llm_manager = LLMManager(self)
+        self.llm_manager.bind_initializer(self)
+
         # 记忆
         self.memory = SimpleMemory()
-        self.llm_adapter = OllamaAdapter(model=LLM_MODEL, host=OLLAMA_HOST).set_temperature(LLM_TEMPERATURE)
-        self.tool_adapter = OllamaAdapter(model=TOOL_LLM_MODEL, host=OLLAMA_HOST)
+        # 按当前 provider 构造适配器（默认本地 Ollama）
+        self.llm_adapter = self.llm_manager.build_llm_adapter()
+        self.tool_adapter = self.llm_manager.build_tool_adapter()
         self.memory_manager = MemoryManager(self.memory, self.tool_adapter)
 
         # 角色 + 情感

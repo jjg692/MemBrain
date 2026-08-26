@@ -50,7 +50,6 @@ class LangGraphMemoryAgent:
         system_prompt: Optional[str] = None,
         message_bus: Optional[MessageBus] = None,
     ):
-        from core.config import LLM_MODEL, TOOL_LLM_MODEL, OLLAMA_HOST
         self.memory = memory_manager
         self.role_manager = role_manager
         self.emotion_store = emotion_store
@@ -58,8 +57,23 @@ class LangGraphMemoryAgent:
         self.message_bus = message_bus
 
         self.system_prompt = system_prompt or role_manager.load_prompt(role_id)
-        self.llm_adapter = llm_adapter or OllamaAdapter(model=LLM_MODEL, host=OLLAMA_HOST)
-        self.tool_adapter = tool_adapter or OllamaAdapter(model=TOOL_LLM_MODEL, host=OLLAMA_HOST)
+        # 默认用 LLMManager 按当前 provider 构建（本地 Ollama / 远程兼容均可），
+        # 传入的 llm_adapter 优先（AgentFactory 会传入 initializer 的适配器以支持热切换）
+        if llm_adapter is None or tool_adapter is None:
+            try:
+                from core.llm_manager import LLMManager
+                _mgr = LLMManager()
+                if llm_adapter is None:
+                    llm_adapter = _mgr.build_llm_adapter()
+                if tool_adapter is None:
+                    tool_adapter = _mgr.build_tool_adapter()
+            except Exception:
+                from core.config import LLM_MODEL, TOOL_LLM_MODEL, OLLAMA_HOST
+                from core.adapters import OllamaAdapter as _OA
+                llm_adapter = llm_adapter or _OA(model=LLM_MODEL, host=OLLAMA_HOST)
+                tool_adapter = tool_adapter or _OA(model=TOOL_LLM_MODEL, host=OLLAMA_HOST)
+        self.llm_adapter = llm_adapter
+        self.tool_adapter = tool_adapter
 
         self.analyzer = EmotionAnalyzer(self.tool_adapter)
 

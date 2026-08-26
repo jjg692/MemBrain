@@ -29,8 +29,22 @@ def _int(value, default: int) -> int:
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = _int(os.getenv("PORT"), 8000)
 
-# ===================== Ollama LLM =====================
+# ===================== LLM 提供商 =====================
+# provider: ollama（本地）/ openai（远程 OpenAI 兼容接口：DeepSeek/百度/OpenAI 等）
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+
+# ---- 本地 Ollama ----
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+
+# ---- 远程 OpenAI 兼容 ----
+# 空表示未配置；需要 base_url + api_key + model
+LLM_API_BASE_URL = os.getenv("LLM_API_BASE_URL", "").strip()
+LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
+# 远程主模型与工具模型（remote 模式下工具/抽取用 remote_tool_model，可同主模型）
+LLM_REMOTE_MODEL = os.getenv("LLM_REMOTE_MODEL", "").strip()
+LLM_REMOTE_TOOL_MODEL = os.getenv("LLM_REMOTE_TOOL_MODEL", "").strip()
+
+# ---- 模型名（按 provider 决定最终用哪个） ----
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen3.5:9b")
 TOOL_LLM_MODEL = os.getenv("TOOL_LLM_MODEL", "qwen2.5:7b")
 # 采样温度（角色扮演：略高有活气；0.0-1.0）

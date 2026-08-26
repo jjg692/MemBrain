@@ -150,6 +150,47 @@ def setup_admin(app):
         online = app.get_online_counts()
         return {"code": 0, "data": {**mem_stats, "online": online, "roles": len(app.role_manager.all_roles())}}
 
+    # ===================== LLM 管理 =====================
+
+    @router.get("/llm/config")
+    async def llm_config():
+        return {"code": 0, "data": app.llm_manager.get_config()}
+
+    @router.post("/llm/test")
+    async def llm_test(request: Request):
+        body = await request.json()
+        # 可选：临时覆盖配置再测（不持久化）；留空则测当前配置
+        if body:
+            # 临时性测试：应用到内存 os.environ 但不写 .env，测完恢复
+            saved = {}
+            mapping = app.llm_manager._map_key
+            for k, v in body.items():
+                env_k = mapping(k)
+                if env_k:
+                    saved[env_k] = __import__("os").environ.get(env_k)
+                    __import__("os").environ[env_k] = str(v)
+            try:
+                result = app.llm_manager.test_connection()
+            finally:
+                import os as _os
+                for env_k, old in saved.items():
+                    if old is None:
+                        _os.environ.pop(env_k, None)
+                    else:
+                        _os.environ[env_k] = old
+        else:
+            result = app.llm_manager.test_connection()
+        return {"code": 0 if result.get("ok") else -1, "data": result,
+                "message": "连接成功" if result.get("ok") else result.get("error", "连接失败")}
+
+    @router.post("/llm/switch")
+    async def llm_switch(request: Request):
+        body = await request.json()
+        result = app.llm_manager.switch_config(body)
+        if result.get("errors"):
+            return {"code": -1, "message": "；".join(result["errors"]), "data": result}
+        return {"code": 0, "message": "LLM 配置已更新并生效", "data": result}
+
     # ===================== 配置管理 =====================
 
     @router.get("/config")
