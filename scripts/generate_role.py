@@ -21,8 +21,7 @@ sys.path.insert(0, str(ROOT))
 
 from role_generator.sources import fetch_character_sources, to_merge_text
 from role_generator.distill import distill_character, render_skill_prompt
-from core.adapters import OllamaAdapter
-from core.config import OLLAMA_HOST
+from core.llm_manager import LLMManager
 
 
 def list_sources() -> str:
@@ -63,16 +62,23 @@ def main():
         Path(args.save_source).write_text(json.dumps(docs, ensure_ascii=False, indent=2), encoding='utf-8')
         print(f'    [来源已存] {args.save_source}')
 
-    # 确定蒸馏用模型
-    model = args.model
-    from core.config import TOOL_LLM_MODEL
-    model = args.model or TOOL_LLM_MODEL
-    adapter = OllamaAdapter(model=model, host=OLLAMA_HOST)
+    # 蒸馏用 LLM：与项目主体保持一致（LLMManager 按当前 provider 构建）
+    # --model 为可选覆盖：临时写入对应环境变量后重建适配器
+    import os
+    from core.llm_manager import LLMManager
+    _mgr = LLMManager()
+    if args.model:
+        # 覆盖主模型/工具模型环境变量（跟随 provider 语义），
+        # 远程用 LLM_REMOTE_MODEL，本地用 LLM_MODEL，保持一致。
+        env_key = 'LLM_REMOTE_MODEL' if os.environ.get('LLM_PROVIDER','ollama').strip().lower() == 'openai' else 'LLM_MODEL'
+        os.environ[env_key] = args.model
+    adapter = _mgr.build_llm_adapter()
+    model = getattr(adapter, 'model', '') or args.model
 
-    print(f'[2/3] 行为蒸馏 (model={model}) ...')
+    print(f'[2/3] 行为蒸馏 (provider代管, model={model}) ...')
     data = distill_character(adapter, args.character, merged, work=args.work)
     if not data:
-        print('[蒸馏失败] 无法从 LLM 得到有效结果；请确认 Ollama 已运行 (ollama serve)')
+        print('[蒸馏失败] 无法从 LLM 得到有效结果；请确认 LLM 服务可用（当前 provider 配置）')
         sys.exit(2)
 
     # 来源描述（写进 prompt 附录）

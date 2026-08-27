@@ -15,6 +15,7 @@ LangGraph 执行流程：
               |-> 有 tool_calls -> tools(执行) -> agent(再次调用)
               └-> 无 tool_calls   -> END
 """
+import json
 import threading
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -176,10 +177,14 @@ class LangGraphMemoryAgent:
                 chat_messages.append({"role": "user", "content": m.content or ""})
             elif isinstance(m, AIMessage):
                 if getattr(m, "tool_calls", None):
+                    import os as _os
+                    _provider = _os.environ.get("LLM_PROVIDER", "ollama").strip().lower()
                     chat_messages.append({
                         "role": "assistant",
                         "content": m.content or "",
-                        "tool_calls": self._to_ollama_tool_calls(m.tool_calls),
+                        "tool_calls": self._to_ollama_tool_calls(
+                            m.tool_calls, openai_style=(_provider == "openai")
+                        ),
                     })
                 else:
                     chat_messages.append({"role": "assistant", "content": m.content or ""})
@@ -213,17 +218,30 @@ class LangGraphMemoryAgent:
         return "end"
 
     @staticmethod
-    def _to_ollama_tool_calls(lc_tool_calls) -> List[dict]:
-        """把 LangChain AIMessage.tool_calls 转成 Ollama 格式（含 id）"""
+    def _to_ollama_tool_calls(lc_tool_calls, openai_style: bool = False) -> List[dict]:
+        """把 LangChain AIMessage.tool_calls 转成回显格式（含 id）。
+
+        - openai_style=False：Ollama 格式，arguments 为 dict
+        - openai_style=True ：OpenAI 兼容接口(远程)，arguments 需为 JSON 字符串
+        """
         out = []
         for tc in lc_tool_calls:
-            out.append({
+            args = tc.get("args", {})
+            if openai_style and not isinstance(args, str):
+                try:
+                    args = json.dumps(args, ensure_ascii=False)
+                except Exception:
+                    args = "{}"
+            entry = {
                 "function": {
                     "name": tc.get("name", ""),
-                    "arguments": tc.get("args", {}),
+                    "arguments": args,
                 },
                 "id": tc.get("id", ""),
-            })
+            }
+            if openai_style:
+                entry["type"] = "function"
+            out.append(entry)
         return out
 
 

@@ -1,7 +1,7 @@
 """
 L3 主动信息池：外部信息采集 + 主动推送
 
-- L3Collector：周期性采集外部实时信息源（复用 search_web），去重后入库 ChromaDB type=l3_info
+- L3Collector：周期性采集外部实时信息源（调用 fetch_bilibili_popular 抓取热榜），去重后入库 ChromaDB type=l3_info
 - L3Pusher:周期性扫描未推送的 L3 条目，调用 Agent.proactive_message 生成主动消息，
            并通过 WebSocket 私聊通道推送给在线用户
 """
@@ -20,7 +20,7 @@ from core.config import (
 from core.logger import log_info, log_error
 from core.memory.vector_store import SimpleMemory
 from core.adapters import LLMAdapter
-from core.tools import search_web
+from core.tools import fetch_bilibili_popular
 
 
 class L3Collector:
@@ -39,10 +39,12 @@ class L3Collector:
         new_count = 0
         for kw in self.keywords:
             try:
-                content = search_web(kw)
-                if not content or "搜索服务不可用" in content or "降级" in content:
-                    # 免费/降级结果也可以存，但跳过明显失败
+                # L3 主动信息采集直接调用独立热榜抓取（与 search_web 解耦），
+                # 返回原始条目列表并格式化为文本，供 Agent 主动开口时使用
+                items = fetch_bilibili_popular(kw)
+                if not items:
                     continue
+                content = _format_bilibili_items(kw, items)
                 if self._store_item(kw, content):
                     new_count += 1
             except Exception as e:
@@ -166,6 +168,16 @@ class L3Pusher:
 
 def _default_role(initializer):
     return initializer.role_manager.get_default_role() or "kasumi"
+
+
+def _format_bilibili_items(keyword: str, items: list) -> str:
+    """把 fetch_bilibili_popular 返回的条目列表格式化为文本，供 L3 入库/Agent 引用"""
+    lines = [f"Bilibili 热门（与“{keyword}”相关推荐）："]
+    for i, it in enumerate(items, 1):
+        title = it.get("title", "")
+        uri = it.get("uri", "")
+        lines.append(f"{i}. {title}" + (f"  {uri}" if uri else ""))
+    return "\n".join(lines)
 
 
 def _hash(text: str) -> str:
