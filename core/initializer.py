@@ -21,6 +21,7 @@ from core.memory.l3 import L3Collector, L3Pusher
 from core.config import L3_ENABLED
 from core.room.message_bus import MessageBus
 from core.room.room_manager import RoomManager
+from core.user_profile import UserProfile
 
 from agent.graph import LangGraphMemoryAgent
 
@@ -68,6 +69,9 @@ class AppInitializer:
         # 角色 + 情感
         self.role_manager = RoleManager()
         self.emotion_store = EmotionStore(self.memory)
+
+        # 用户资料（昵称等）
+        self.user_profile = UserProfile()
 
         # 房间
         self.message_bus = MessageBus()
@@ -138,6 +142,10 @@ class AppInitializer:
 
     def get_contact_info(self) -> list:
         return self.role_manager.list_contacts()
+
+    def get_user_nickname(self, user_id: str) -> str:
+        """获取用户昵称（供 Agent system prompt 注入）"""
+        return self.user_profile.get_nickname(user_id or "default_user")
 
     def get_online_counts(self) -> dict:
         from api.websocket_manager import single_ws_manager, room_ws_manager

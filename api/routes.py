@@ -73,6 +73,22 @@ def setup_routes(initializer: AppInitializer):
                 items.append({"role": "assistant", "content": asst_part.strip()})
         return {"code": 0, "data": items}
 
+    # ===================== 用户资料（昵称） =====================
+
+    @router.get("/api/profile")
+    async def get_profile(user_id: str = Query(default="default_user")):
+        """获取用户资料（昵称）"""
+        return {"code": 0, "data": app.user_profile.get_profile(user_id)}
+
+    @router.post("/api/profile")
+    async def set_profile(request: Request):
+        """设置用户资料（昵称）。body: {user_id?, nickname}"""
+        body = await request.json()
+        user_id = body.get("user_id") or "default_user"
+        nickname = body.get("nickname") or ""
+        saved = app.user_profile.set_nickname(user_id, nickname)
+        return {"code": 0, "data": {"user_id": user_id, "nickname": saved}, "message": "已保存"}
+
     # ===================== 群聊房间 =====================
 
     @router.get("/api/rooms")

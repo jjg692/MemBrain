@@ -2,15 +2,34 @@
 WebSocket 端点
 - /ws/chat：私聊（携带 user_id + role_id）
 - /ws/room/{room_id}：群聊（携带 room_id + role_id + content）
+
+群聊采用"接力对话"调度：
+1. 用户消息进 L0 并广播
+2. 首轮：所有成员并行对用户消息各回一句
+3. 接力轮：基于"包含所有人最新发言"的最新中国群聊上下文，让所有成员
+   "看到别人刚说的话"并再次自然接话，循环 ROOM_RELAY_ROUNDS 次，
+   形成角色之间互相搭话的多轮连续对话。
 """
 import asyncio
 import json
+import os
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from core.initializer import AppInitializer
 from core.logger import log_error
 from api.websocket_manager import single_ws_manager, room_ws_manager
+
+
+def _int(v, default):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+# 接力对话轮数（用户发言后的额外"角色互相搭话"轮次），可被环境变量覆盖
+ROOM_RELAY_ROUNDS = _int(os.getenv("ROOM_RELAY_ROUNDS", ""), 2)
 
 
 def setup_websocket(app) -> AppInitializer:
@@ -64,6 +83,33 @@ def register(app, initializer: AppInitializer):
 
     # ===================== 群聊 =====================
 
+    def _room_user(room_id: str) -> str:
+        return "_room_" + room_id
+
+    async def _speak_all(room_id: str, members: dict, prompt: str) -> None:
+        """
+        让所有成员依次发言（顺序轮流，非并行）。
+
+        为什么顺序执行：
+        - 每个 agent.chat 都会触发情感持久化（ChromaDB upsert）与主模型生成，
+          二者都会调用 Ollama（embeddings / chat）。Ollama 对并发请求会排队甚至
+          卡死（曾出现整个 gather 挂起），顺序执行可避免并发打爆 Ollama。
+        - 顺序轮流也更契合"接力对话"：每次发言前都取最新 L0 上下文，后面的角色
+          能看到前面角色刚说的话，形成自然的多轮互相搭话。
+        """
+        for role, agent in members.items():
+            # 每次发言前都取最新 L0 上下文，保证彼此能看到最新发言（接力关键）
+            ctx = initializer.message_bus.get_formatted_context(room_id, n=30)
+            try:
+                reply = await asyncio.get_event_loop().run_in_executor(
+                    None, agent.chat, _room_user(room_id), prompt, None, ctx
+                )
+            except Exception as e:
+                log_error("Room", f"{role} 发言失败: {e}")
+                reply = ""
+            if reply and reply.strip():
+                await initializer.message_bus.send_agent_message(room_id, role, reply)
+
     @router.websocket("/ws/room/{room_id}")
     async def ws_room(ws: WebSocket, room_id: str, role_id: str = ""):
         await room_ws_manager.connect(room_id, ws)
@@ -89,23 +135,17 @@ def register(app, initializer: AppInitializer):
                     await initializer.message_bus.send_system_message(room_id, "房间还没有成员，快去邀请角色吧～")
                     continue
 
-                room_context = initializer.message_bus.get_formatted_context(room_id, n=20)
+                # 第 1 轮：所有成员依次对用户消息各回一句
+                await _speak_all(room_id, members, content)
 
-                # 并行让每个成员 Agent 回复
-                async def run_member(role, agent):
-                    try:
-                        reply = await asyncio.get_event_loop().run_in_executor(
-                            None, agent.chat, "_room_" + room_id, content, None, room_context
-                        )
-                        return role, reply
-                    except Exception as e:
-                        log_error("Room", f"{role} 回复失败: {e}")
-                        return role, f"（{role} 暂时无法回复）"
-
-                results = await asyncio.gather(*(run_member(r, a) for r, a in members.items()))
-                for role, reply in results:
-                    if reply and reply.strip():
-                        await initializer.message_bus.send_agent_message(room_id, role, reply)
+                # 接力轮：角色们互相搭话多轮，形成连续对话
+                for i in range(ROOM_RELAY_ROUNDS):
+                    await _speak_all(
+                        room_id, members,
+                        "（群聊接力：上面是群里最新对话。请以你自己的身份自然接一句话，"
+                        "回应/调侃/接续别人刚说的话，或补充一个观点。保持角色性格，简短自然，"
+                        "不要重复已经说过的话，不要一次说太多。）"
+                    )
 
         except WebSocketDisconnect:
             room_ws_manager.disconnect(room_id, ws)

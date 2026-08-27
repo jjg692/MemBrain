@@ -38,14 +38,20 @@ class OllamaAdapter(LLMAdapter):
         return self
 
     def _base_params(self, messages, images=None):
+        # 注意：ollama 0.6.x 的 Client.chat 没有 temperature 顶层参数，
+        # 采样温度必须通过 options={'temperature': ...} 传入，否则抛
+        # "Client.chat() got an unexpected keyword argument 'temperature'"。
+        options = {}
+        if self.temperature is not None:
+            options["temperature"] = self.temperature
         params = {
             "model": self.model,
             "messages": messages,
             "stream": False,
             "think": False,
         }
-        if self.temperature is not None:
-            params["temperature"] = self.temperature
+        if options:
+            params["options"] = options
         if images:
             # Ollama 图片放在最后一条 user 消息的 images 字段
             for msg in reversed(messages):

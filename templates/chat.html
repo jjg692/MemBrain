@@ -19,6 +19,12 @@
   .sidebar-header { padding:14px 16px; font-size:16px; font-weight:600; border-bottom:1px solid rgba(255,255,255,.08); display:flex; justify-content:space-between; align-items:center; }
   .sidebar-header .brand { color:#07c160; }
   .sidebar-header .admin-link a { color:#9aa0a6; font-size:12px; text-decoration:none; }
+  .user-bar { display:flex; align-items:center; gap:8px; padding:10px 16px; border-bottom:1px solid rgba(255,255,255,.06); cursor:pointer; }
+  .user-bar .user-avatar { width:30px; height:30px; border-radius:50%; background:#07c160; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:600; font-size:14px; flex-shrink:0; }
+  .user-bar .user-info { flex:1; min-width:0; }
+  .user-bar .user-name { font-size:13px; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .user-bar .user-edit { font-size:11px; color:#9aa0a6; }
+  .user-bar .user-edit input { width:100%; padding:5px 8px; border:none; border-radius:5px; background:#3a3f47; color:#fff; outline:none; font-size:13px; }
   .search-box { padding:10px 12px; }
   .search-box input { width:100%; padding:7px 12px; border:none; border-radius:6px; background:#3a3f47; color:#fff; outline:none; font-size:13px; }
   .contact-list { flex:1; overflow-y:auto; padding:6px 0; }
@@ -85,6 +91,13 @@
       <span class="brand">💬 MemBrain</span>
       <span class="admin-link"><a href="/admin" target="_blank">后台管理 →</a></span>
     </div>
+    <div class="user-bar" id="userBar" title="点击修改我的昵称">
+      <div class="user-avatar" id="userAvatar">我</div>
+      <div class="user-info">
+        <div class="user-name" id="userName">我</div>
+        <div class="user-edit" id="userEditHint">点击修改昵称 ✎</div>
+      </div>
+    </div>
     <div class="search-box"><input id="searchInput" placeholder="搜索联系人…"></div>
     <div class="contact-list" id="contactList"></div>
   </aside>
@@ -141,8 +154,81 @@ let roomWs = null;
 let messagesCache = {};  // key -> [{role, content, sender}]
 let typingTimers = {};
 const AV = { kasumi: 0, kokoro: 0 };
+// 我的昵称（纯前端本地存储，仅用于界面显示，不影响后端 user_id/记忆隔离）
+let myName = localStorage.getItem('membrain_myName') || '我';
 
 const $ = id => document.getElementById(id);
+
+// ===================== 我的昵称 =====================
+function myNameInitial(){ return (myName || '我').trim().charAt(0) || '我'; }
+function renderMyName(){
+  $('userName').textContent = myName || '我';
+  $('userAvatar').textContent = myNameInitial();
+}
+function saveMyName(name){
+  name = (name || '').trim();
+  if(!name){ name = '我'; }
+  myName = name;
+  localStorage.setItem('membrain_myName', name);
+  // 同步到后端用户资料，让角色在 system prompt 里能用昵称称呼用户
+  try {
+    fetch('/api/profile', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({user_id:'default_user', nickname:(myName==='我')?'':myName})});
+  } catch(e) {}
+  renderMyName();
+  // 重绘当前会话，让昵称变更即时反映
+  const list = $('msgList');
+  const scrollTop = list.scrollTop;
+  const saved = messagesCache[activeType==='room' ? 'room:'+activeKey : 'private:'+activeKey+':'+activeRole];
+  list.innerHTML = '';
+  if(saved){ saved.forEach(m => appendMessage(m)); }
+  list.scrollTop = scrollTop;
+}
+// 启动时从后端读取已保存昵称（与 localStorage 取最大值/最新为准）
+async function loadMyNameFromServer(){
+  try {
+    const res = await fetch('/api/profile?user_id=default_user');
+    const json = await res.json();
+    const nick = (json.data && json.data.nickname || '').trim();
+    if(nick){
+      myName = nick;
+      localStorage.setItem('membrain_myName', nick);
+      renderMyName();
+    }
+  } catch(e) {}
+}
+$('userBar').onclick = () => {
+  const bar = $('userBar');
+  const name = $('userName');
+  const editHint = $('userEditHint');
+  // 简单内联编辑：把名字换成输入框
+  const input = document.createElement('input');
+  input.value = (myName==='我') ? '' : myName;
+  input.placeholder = '输入昵称，回车保存';
+  input.maxLength = 12;
+  name.replaceWith(input);
+  editHint.textContent = '回车保存 · Esc 取消';
+  input.focus(); input.select();
+  let done = false;
+  const finish = (save) => {
+    if(done) return; done = true;
+    const val = save ? input.value : (myName);
+    // 恢复显示
+    const newName = document.createElement('div');
+    newName.className = 'user-name'; newName.id = 'userName';
+    newName.textContent = myName;
+    input.replaceWith(newName);
+    editHint.textContent = '点击修改昵称 ✎';
+    if(save) saveMyName(val);
+  };
+  input.onkeydown = (e) => {
+    if(e.key==='Enter'){ e.preventDefault(); finish(true); }
+    else if(e.key==='Escape'){ finish(false); }
+    else { e.stopPropagation(); }
+  };
+  input.onblur = () => finish(true);
+};
+renderMyName();
 
 // ===================== 加载联系人 =====================
 async function loadContacts() {
@@ -287,10 +373,12 @@ function appendMessage({role, content, sender}) {
   const div = document.createElement('div');
   const isSelf = role==='user';
   const senderName = contacts.find(c=>c.role_id===sender)?.display_name || sender;
+  // 用户自己的消息显示"我的昵称"（默认"我"）
+  const selfName = (myName || '我');
   div.className = 'msg ' + (isSelf?'self':'other');
-  const av = isSelf ? `<div class="avatar" style="background:#5b8ff9">我</div>`
+  const av = isSelf ? `<div class="avatar" style="background:#5b8ff9">${esc(selfName.trim().charAt(0) || '我')}</div>`
                     : `<div class="avatar">${esc((senderName||'?')[0])}</div>`;
-  div.innerHTML = av + `<div class="msg-body"><div class="msg-meta">${isSelf?'我':esc(senderName)}</div><div class="msg-bubble">${esc(content)}</div></div>`;
+  div.innerHTML = av + `<div class="msg-body"><div class="msg-meta">${isSelf?esc(selfName):esc(senderName)}</div><div class="msg-bubble">${esc(content)}</div></div>`;
   $('msgList').appendChild(div); scrollBottom();
 
   // 缓存键按会话区分：私聊用 (user_id, role_id)，群聊用 room_id
@@ -424,6 +512,7 @@ $('newRoomBtn').onclick=showRoomModal;
 $('searchInput').addEventListener('input',e=>renderContacts(e.target.value.trim()));
 
 loadContacts();
+loadMyNameFromServer();
 setInterval(loadRoomsIntoList, 15000);
 </script>
 </body>

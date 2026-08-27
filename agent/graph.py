@@ -164,9 +164,10 @@ class LangGraphMemoryAgent:
         )
 
         # ========== 构建 LLM 消息 ==========
-        # 第一部分：L1 历史（该 user 的最近会话，不含本次）
+        # 第一部分：L1 历史（该 user 的完整会话，不含本次；L1 已在 add_to_l1 中按
+        # MEMORY_CONTEXT_MAX_ROUNDS 压缩，故全量注入不会无限增长，且能支撑跨轮指代消解）
         chat_messages = [{"role": "system", "content": base_prompt}]
-        history = session["l1"][-10:]
+        history = session["l1"]
         for m in history:
             if m["role"] in ("user", "assistant"):
                 chat_messages.append({"role": m["role"], "content": m["content"]})
@@ -250,7 +251,20 @@ class LangGraphMemoryAgent:
     def _build_system_prompt(self, session, retrieval, user_id, role_id, room_context=None) -> str:
         lines = [self.system_prompt or f"你是角色 {role_id}。"]
         lines.append(f"【当前日期】{datetime.now().strftime('%Y年%m月%d日')}")
-        lines.append(f"【当前用户】{user_id}（对话中\"你\"指当前用户，\"我\"指你本人）")
+
+        # 用户昵称：若设置了则注入，要求角色用该昵称称呼用户
+        try:
+            from core.user_profile import UserProfile
+            nickname = UserProfile().get_nickname(user_id or "default_user")
+        except Exception:
+            nickname = ""
+        if nickname:
+            lines.append(
+                f"【当前用户】{user_id}（称呼：{nickname}。对话中\"你\"指用户\"{nickname}\"，\"我\"指你本人。"
+                "尽量自然地用这个昵称称呼用户，像朋友一样，但不要每句都喊。）"
+            )
+        else:
+            lines.append(f"【当前用户】{user_id}（对话中\"你\"指当前用户，\"我\"指你本人）")
 
         # 角色扮演守则：全程保持角色，禁止跳出人设
         lines.append(
@@ -363,7 +377,8 @@ class LangGraphMemoryAgent:
             sys_prompt = "\n\n".join(prompt_bits)
 
             chat_messages = [{"role": "system", "content": sys_prompt}]
-            history = session["l1"][-10:]
+            # 主动开口同样用 L1 全量历史，保证指代/话题能接续（L1 有压缩兜底）
+            history = session["l1"]
             for m in history:
                 if m["role"] in ("user", "assistant"):
                     chat_messages.append({"role": m["role"], "content": m["content"]})
