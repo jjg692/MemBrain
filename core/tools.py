@@ -400,13 +400,27 @@ CONTROL_PC_TOOL_OLLAMA = {
     },
 }
 
-ALL_TOOLS = [SEARCH_TOOL_OLLAMA, CONTROL_PC_TOOL_OLLAMA]
+# 助手核心工具（提醒/时间/文件）——从 core.assistant_tools 引入
+try:
+    from core.assistant_tools import (
+        ASSISTANT_TOOLS_SCHEMA, ASSISTANT_TOOL_REGISTRY, ensure_workspace,
+    )
+    ensure_workspace()
+    _ASSISTANT_AVAILABLE = True
+except Exception:
+    _ASSISTANT_AVAILABLE = False
+
+ALL_TOOLS = [SEARCH_TOOL_OLLAMA, CONTROL_PC_TOOL_OLLAMA] + (
+    ASSISTANT_TOOLS_SCHEMA if _ASSISTANT_AVAILABLE else []
+)
 
 # name -> 可调用函数
 TOOL_REGISTRY = {
     "search_web": search_web,
     "control_pc": control_pc,
 }
+if _ASSISTANT_AVAILABLE:
+    TOOL_REGISTRY.update(ASSISTANT_TOOL_REGISTRY)
 
 
 def execute_tool(name: str, arguments: dict) -> str:

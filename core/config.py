@@ -93,8 +93,8 @@ MEMORY_FACT_DECAY_DAYS = _int(os.getenv("MEMORY_FACT_DECAY_DAYS"), 90)
 MEMORY_DEBUG = _bool(os.getenv("MEMORY_DEBUG"))
 
 # ===================== L3 主动信息池 =====================
-# 是否启用 L3 采集/推送
-L3_ENABLED = _bool(os.getenv("L3_ENABLED"))
+# 是否启用 L3 采集/推送（默认启用；设为 false 可关闭）
+L3_ENABLED = _bool(os.getenv("L3_ENABLED", "true"))
 # 采集周期（秒）：定时拉取外部信息源
 L3_UPDATE_INTERVAL = _int(os.getenv("L3_UPDATE_INTERVAL"), 7200)
 # 推送周期（秒）：扫描未推送的 L3 条目并让 Agent 主动开口
@@ -103,6 +103,27 @@ L3_PUSH_INTERVAL = _int(os.getenv("L3_PUSH_INTERVAL"), 300)
 L3_KEYWORDS = [k.strip() for k in os.getenv("L3_KEYWORDS", "").split(",") if k.strip()]
 # L3 池最大条目数（超出按时间清理，0=不限）
 L3_MAX_ITEMS = _int(os.getenv("L3_MAX_ITEMS"), 200)
+
+# ===================== 日程/提醒引擎 =====================
+# 提醒调度线程的扫描间隔（秒）
+REMINDER_SCAN_INTERVAL = _int(os.getenv("REMINDER_SCAN_INTERVAL"), 15)
+# 提醒持久化文件（JSON）
+REMINDER_FILE = str(Path(PROJECT_ROOT) / os.getenv("REMINDER_FILE", "reminders.json"))
+
+# ===================== 感知层 =====================
+# 是否启用感知层（时序/系统/情境/情绪趋势）
+PERCEPTION_ENABLED = _bool(os.getenv("PERCEPTION_ENABLED", "true"))
+# 用户常驻城市（位置情境；若不填则只给时段情境）
+PERCEPTION_CITY = os.getenv("PERCEPTION_CITY", "").strip()
+# 感知历史（活跃时段 + 情绪曲线）持久化文件
+PERCEPTION_FILE = str(Path(PROJECT_ROOT) / os.getenv("PERCEPTION_FILE", "perception.json"))
+# 情绪趋势保留的样本数 / 活跃时段窗口天数
+MOOD_TREND_MAX_SAMPLES = _int(os.getenv("MOOD_TREND_MAX_SAMPLES"), 200)
+ROUTINE_WINDOW_DAYS = _int(os.getenv("ROUTINE_WINDOW_DAYS"), 30)
+
+# ===================== 助手工具（文件沙箱） =====================
+# 角色可读写的沙箱根目录（read_file/write_file/list_files 仅限此目录及 uploads）
+ASSISTANT_WORKSPACE_DIR = str(Path(PROJECT_ROOT) / os.getenv("ASSISTANT_WORKSPACE_DIR", "assistant_workspace"))
 
 # 角色配置
 ROLES_FILE = str(Path(PROJECT_ROOT) / "config" / "roles.json")

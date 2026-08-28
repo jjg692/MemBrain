@@ -60,6 +60,8 @@ async def startup():
     threading.Thread(target=load_facts, daemon=True).start()
     # 启动 L3 主动信息池（外部信息采集 + 主动推送）
     initializer.start_l3_loops()
+    # 启动日程/提醒引擎（到点主动提醒 → WS 推送）
+    initializer.start_reminder_scheduler()
     log_info("Startup", "启动完成")
 
 

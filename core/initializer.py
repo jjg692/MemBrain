@@ -22,6 +22,9 @@ from core.config import L3_ENABLED
 from core.room.message_bus import MessageBus
 from core.room.room_manager import RoomManager
 from core.user_profile import UserProfile
+from core.reminder import ReminderStore, ReminderScheduler
+from core.config import REMINDER_SCAN_INTERVAL, PERCEPTION_ENABLED, PERCEPTION_CITY
+from core.perception import MoodTrend, RoutineModel, PerceptionManager
 
 from agent.graph import LangGraphMemoryAgent
 
@@ -44,6 +47,7 @@ class AgentFactory:
                 llm_adapter=self.initializer.llm_adapter,
                 tool_adapter=self.initializer.tool_adapter,
                 message_bus=self.initializer.message_bus,
+                perception=self.initializer.perception,
             )
             self._cache[key] = agent
         return self._cache[key]
@@ -88,6 +92,20 @@ class AppInitializer:
         )
         self._l3_stop = None  # 由 web_app 启动线程时赋值
 
+        # 日程/提醒引擎（存储 + 调度）
+        self.reminder_store = ReminderStore()
+        self.reminder_scheduler = ReminderScheduler(
+            self.reminder_store, self.agent_factory,
+            push_callback=self._reminder_push_callback,
+        )
+
+        # 感知层（时序/系统/情境/作息/情绪趋势）
+        self.mood_trend = MoodTrend()
+        self.routine_model = RoutineModel()
+        self.perception = PerceptionManager(
+            mood_trend=self.mood_trend, routine=self.routine_model, city=PERCEPTION_CITY
+        ) if PERCEPTION_ENABLED else None
+
         log_info("Init", "AppInitializer 组装完成")
 
     def load_all_role_facts(self):
@@ -121,6 +139,24 @@ class AppInitializer:
                 pass
         except Exception as e:
             log_error("L3", f"推送调度失败 {user_id}: {e}")
+
+    def _reminder_push_callback(self, user_id: str, data: dict):
+        """把提醒消息推送到用户私聊 WS（后台线程调用，调度到事件循环）"""
+        from api.websocket_manager import single_ws_manager
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    single_ws_manager.push_to_user(user_id, data), loop
+                )
+        except Exception as e:
+            log_error("Reminder", f"提醒推送调度失败 {user_id}: {e}")
+
+    def start_reminder_scheduler(self):
+        """启动提醒调度线程（幂等）"""
+        if self.reminder_scheduler is not None:
+            self.reminder_scheduler.start(REMINDER_SCAN_INTERVAL)
 
     def start_l3_loops(self):
         """启动 L3 采集/推送后台线程（幂等）"""

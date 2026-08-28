@@ -91,18 +91,21 @@ def register(app, initializer: AppInitializer):
         让所有成员依次发言（顺序轮流，非并行）。
 
         为什么顺序执行：
-        - 每个 agent.chat 都会触发情感持久化（ChromaDB upsert）与主模型生成，
-          二者都会调用 Ollama（embeddings / chat）。Ollama 对并发请求会排队甚至
-          卡死（曾出现整个 gather 挂起），顺序执行可避免并发打爆 Ollama。
+        - 每个 agent.chat 都会触发主模型生成（Ollama/远程 LLM）。Ollama 对并发
+          请求会排队甚至卡死（曾出现整个 gather 挂起），顺序执行可避免并发打爆。
         - 顺序轮流也更契合"接力对话"：每次发言前都取最新 L0 上下文，后面的角色
           能看到前面角色刚说的话，形成自然的多轮互相搭话。
+
+        情感说明：群聊接力传 persist_emotion=False。角色之间的对话不属于"用户对
+        角色"的情感信号，不应更新对用户的感情/好感度，也避免每角色每轮重复做
+        情感分析（省调用、防误染私聊维度）。
         """
         for role, agent in members.items():
             # 每次发言前都取最新 L0 上下文，保证彼此能看到最新发言（接力关键）
             ctx = initializer.message_bus.get_formatted_context(room_id, n=30)
             try:
                 reply = await asyncio.get_event_loop().run_in_executor(
-                    None, agent.chat, _room_user(room_id), prompt, None, ctx
+                    None, agent.chat, _room_user(room_id), prompt, None, ctx, False
                 )
             except Exception as e:
                 log_error("Room", f"{role} 发言失败: {e}")

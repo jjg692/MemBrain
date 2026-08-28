@@ -31,7 +31,8 @@ from core.tools import ALL_TOOLS, TOOL_REGISTRY
 
 from core.memory.memory_manager import MemoryManager
 from core.emotion import (
-    EmotionState, AffectionState, EmotionAnalyzer, EmotionStore, emotion_to_prompt_text,
+    EmotionState, AffectionState, EmotionAnalyzer, EmotionStore,
+    emotion_to_prompt_text, relation_to_prompt_text,
 )
 from core.role.manager import RoleManager
 from core.room.message_bus import MessageBus
@@ -50,12 +51,14 @@ class LangGraphMemoryAgent:
         tool_adapter: Optional[LLMAdapter] = None,
         system_prompt: Optional[str] = None,
         message_bus: Optional[MessageBus] = None,
+        perception: Optional[object] = None,
     ):
         self.memory = memory_manager
         self.role_manager = role_manager
         self.emotion_store = emotion_store
         self.role_id = role_id
         self.message_bus = message_bus
+        self.perception = perception
 
         self.system_prompt = system_prompt or role_manager.load_prompt(role_id)
         # 默认用 LLMManager 按当前 provider 构建（本地 Ollama / 远程兼容均可），
@@ -142,10 +145,20 @@ class LangGraphMemoryAgent:
                 break
         user_msg = first_user_msg
 
+        # 感知：记录一次用户活跃（时序/作息模型）
+        perception = getattr(self, "perception", None)
+        if perception is not None:
+            try:
+                perception.record_user_activity(user_id)
+            except Exception:
+                pass
+
         # ========== 模式B 第一阶段：情感/好感度分析（仅在新用户消息轮执行） ==========
-        # 判断是否是首轮（还没有 AIMessage）
+        # persist_emotion=False（群聊接力）时跳过情感分析/持久化：
+        # 避免把角色之间的对话误当成"用户对角色"的情感信号，也省去群聊每角色每轮重复调用
         has_prior_ai = any(isinstance(m, AIMessage) for m in (state.get("messages") or []))
-        if not has_prior_ai:
+        should_persist = state.get("persist_emotion", True) and not has_prior_ai
+        if should_persist:
             last_turns = [getattr(m, "content", "") for m in (state.get("messages") or [])[-6:]]
             analysis = self.analyzer.analyze(
                 user_msg, session["emotion"], session["affection"], last_turns,
@@ -154,6 +167,19 @@ class LangGraphMemoryAgent:
                 session["emotion"] = self.analyzer.merge_emotion(session["emotion"], analysis.get("emotion", {}))
                 session["affection"] = self.analyzer.merge_affection(session["affection"], analysis.get("affection", {}))
                 self._persist_emotion(user_id, session)
+                # 感知：记录情绪/好感度样本（情绪趋势曲线）
+                if perception is not None:
+                    try:
+                        aff = session["affection"]
+                        avg = (aff.liking + aff.trust + aff.familiarity + aff.respect + aff.interest + aff.attachment) / 6.0
+                        perception.record_mood(
+                            user_id,
+                            session["emotion"].primary,
+                            session["emotion"].valence,
+                            avg,
+                        )
+                    except Exception:
+                        pass
 
         # 记忆检索（L4 + L5）
         retrieval = self.memory.retrieve(user_id, role_id, user_msg, top_k=5)
@@ -285,6 +311,18 @@ class LangGraphMemoryAgent:
 
         # 情感 + 好感度（模式B 第二阶段注入）
         lines.append(emotion_to_prompt_text(session["emotion"], session["affection"]))
+        # 关系养成：好感度 -> 关系阶段 -> 行为差异（称呼 + 距离感 + 开放度），
+        # 使好感度真正驱动角色行为，而非仅注入数值
+        lines.append(relation_to_prompt_text(session["affection"], nickname))
+
+        # 感知层：时序/系统/位置情境/作息/情绪趋势（让角色"意识到当下时空与用户状态"）
+        if getattr(self, "perception", None) is not None:
+            try:
+                perception_text = self.perception.summarize(user_id)
+                if perception_text:
+                    lines.append("【你对当下时空与用户状态的感知】\n" + perception_text)
+            except Exception:
+                pass
 
         lines.append(
             "【我还能做到】有些事我可以偷偷帮你搞定，不用提：\n"
@@ -325,8 +363,14 @@ class LangGraphMemoryAgent:
     # ===================== 对外接口 =====================
 
     def chat(self, user_id: str, user_message: str, image: Optional[str] = None,
-             room_context: Optional[str] = None) -> str:
-        """私聊/群聊入口"""
+             room_context: Optional[str] = None, persist_emotion: bool = True) -> str:
+        """私聊/群聊入口
+
+        persist_emotion: 是否对情绪/好感度做分析与持久化。
+          - 私聊为 True（正常维护与用户的情感联结）
+          - 群聊接力传 False：避免把角色之间的对话误当成"用户对角色"的情感信号，
+            也避免群聊每个角色每轮都重复做情感分析（省调用/防误染）
+        """
         initial: AgentState = {
             "messages": [HumanMessage(content=user_message)],
             "user_id": user_id,
@@ -334,6 +378,7 @@ class LangGraphMemoryAgent:
             "image": image,
             "iteration": 0,
             "room_context": room_context,
+            "persist_emotion": persist_emotion,
         }
         try:
             result = self.graph.invoke(initial)

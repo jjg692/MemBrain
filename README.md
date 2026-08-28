@@ -11,11 +11,13 @@
 | 功能 | 说明 |
 |------|------|
 | 💬 私聊 | 多角色切换，按 `(user_id, role_id)` 隔离记忆 |
-| 👥 群聊 | 多角色同一房间，用户发言后各成员 Agent 并行回复 |
+| 👥 群聊 | 多角色同一房间，**接力对话**（角色按序发言并互相看到最新聊天，可配轮数） |
 | 🧠 五层记忆 | L1 内存 / L2 短期 / L3 信息池 / L4 事实 / L5 角色 |
 | 🔍 自治路由 | 无路由层/改写层，LLM 自主决定是否调用工具 |
-| 🛠️ 工具调用 | `search_web`（百度，未配置 Key 降级 B 站热搜）、`control_pc`（打开应用/浏览器/文件/执行命令） |
-| 💗 情感 / 好感度 | 模式 B 两阶段，6 维好感度跨会话持久化 |
+| 🛠️ 工具调用 | `search_web`（意图路由：Open-Meteo 天气/维基百科/百度/DuckDuckGo）、`control_pc`（打开应用/浏览器/文件/执行命令）、提醒/时间/文件等共 9 个工具 |
+| 💗 情感 / 好感度 | 模式 B 两阶段，6 维好感度跨会话持久化，好感度驱动**关系阶段**（陌生→熟悉→亲密→挚友） |
+| 🕒 感知层 | 时序/系统环境/位置情境/作息习惯/情绪趋势/忙碌在场/关系投入/作息异常 |
+| ⏰ 日程提醒 | ReminderStore + 调度线程，到点调用 Agent 主动开口并 WS 推送（离线待上线补推） |
 | 🖥️ 后台管理 | 联系人/记忆/情感/统计/配置 一体管理 |
 
 ---
@@ -26,7 +28,7 @@
 |------|------|------|------|------|
 | **L1** | 内存上下文 | 内存（按 user_id+role_id 隔离） | 50 轮，超限压缩 | 当前会话历史、指代消解 |
 | **L2** | 短期记忆 | ChromaDB `short_term` | 50 轮 FIFO | 跨会话对话原文召回 |
-| **L3** | 主动信息池 | ChromaDB `l3_info` | 上限可配 | ✅ **已实现**：周期采集外部实时信息（复用 `search_web`，可配关键词），去重入库；`L3Pusher` 周期扫描未推送条目，调用 Agent **主动发起对话**并推送到私聊 WS |
+| **L3** | 主动信息池 | ChromaDB `l3_info` | 上限可配 | ✅ **已实现**：周期采集外部实时信息（调用 `fetch_bilibili_popular` 抓热榜，与 `search_web` 解耦），去重入库；`L3Pusher` 周期扫描未推送条目，调用 Agent **主动发起对话**并推送到私聊 WS（默认启用） |
 | **L4** | 重要事实 | ChromaDB `fact` | 永久（带衰减） | 用户画像，LLM 自动抽取 |
 | **L5** | 角色事实 | ChromaDB `role_fact` | 永久 | 角色设定，仅按 role_id 隔离 |
 
@@ -72,6 +74,51 @@ END
 2. **第二阶段**：基于分析结果 + 记忆 + 角色人设生成最终回复
 
 好感度 6 维：喜欢 / 信任 / 熟悉 / 尊重 / 兴趣 / 依恋（0-1），跨会话持久化到 ChromaDB。
+
+**关系养成（好感度 → 行为差异）**：好感度（尤其熟悉 / 依恋 / 信任）推导出**关系阶段**（陌生 → 熟悉 → 亲密 → 挚友），并注入 system prompt 驱动角色行为——称呼风格、距离感、开放度随阶段变化，但**绝不改动人设内核**（防 OOC），只在相处中更亲近用户。
+
+> 群聊接力：角色之间对话属于"交流"而非"用户→角色"情感信号，故群聊（尤其接力轮）会跳过情感/好感度更新（`persist_emotion=False`），避免误判私聊维度。
+
+---
+
+## 🕒 感知层（持续观察，而非被动等待）
+
+基于时间戳与系统状态，让角色"意识到当下时空与用户状态"，每轮注入 system prompt：
+
+| 感知 | 说明 |
+|------|------|
+| 时序 | 当前时间 / 星期 / 时段（早午晚深夜）/ 是否周末 |
+| 系统环境 | 操作系统 / 系统运行时长 / 前台活跃应用（尽力读取，读不到不伪造） |
+| 位置情境 | 常驻城市（`PERCEPTION_CITY`）+ 从时段推导情境（工作/午休/自由/休息） |
+| 作息习惯 | 用户活跃时段聚合，得出"通常上午/下午/晚上活跃" |
+| 情绪趋势 | 历次情绪/好感度样本时间序列，算"心情变好/变差/平稳" |
+| 忙碌/在场 | 从距上次活跃推断"此刻是否在线/是否可能不在" |
+| 关系投入 | 断联天数 / 连续活跃天数，支持"想念/关心" |
+| 作息异常 | 当前处于用户通常安静时段 → 提示留意熬夜 |
+
+> 数据存 `perception.json`，与 ChromaDB 解耦；由 `PERCEPTION_ENABLED`（默认开）控制。
+
+---
+
+## ⏰ 日程 / 提醒引擎
+
+- `ReminderStore`：JSON 持久化（`reminders.json`），支持一次性 / 每日 / 每小时 / 每周（可多选星期）。
+- `ReminderScheduler`：后台轮询线程，到点调用该角色 `proactive_message` 生成角色口吻提醒并经 WS 推送 `{type:"reminder"}`；**离线用户提醒保留、下次上线补推**（不丢、不重复轰炸）。
+- 可通过 HTTP `/api/reminders` 或工具 `remind_me` 创建。
+
+---
+
+## 🛠️ 助手核心工具
+
+在 `search_web` / `control_pc` 之外，新增 `core/assistant_tools.py`：
+
+| 工具 | 说明 |
+|------|------|
+| `remind_me` / `list_reminders` / `cancel_reminder` | 让模型主动/安全地设提醒（复用 ReminderStore） |
+| `get_current_time` | 精确时间 / 星期 / 时段 |
+| `read_file` / `write_file` / `list_files` | 本地文件读写（**严格沙箱**：仅限 `assistant_workspace/` 与 `uploads/`，越权拒绝） |
+
+**搜索的多源意图路由**：`search_web` 内部按关键词把查询路由到 **Open-Meteo（天气）→ 维基百科（概念）→ 百度（配置 Key 时）→ DuckDuckGo（通用）**，命中即短路、失败回退、全失败诚实告知（**不再降级成无关热榜**）。`fetch_bilibili_popular` 独立供 L3 采集使用（与 `search_web` 解耦）。
 
 ---
 
@@ -141,6 +188,12 @@ python desktop_pet.py
 | POST | `/api/rooms/{id}/join` | 加入角色 |
 | POST | `/api/rooms/{id}/leave` | 移除角色 |
 | GET | `/api/rooms/{id}/messages` | 群聊消息 |
+| GET | `/api/profile` | 获取用户资料（昵称） |
+| POST | `/api/profile` | 设置用户昵称 |
+| GET | `/api/reminders` | 列出该用户提醒 |
+| POST | `/api/reminders` | 新增提醒 |
+| DELETE | `/api/reminders/{id}` | 删除提醒 |
+| POST | `/api/reminders/{id}/toggle` | 启用/停用提醒 |
 | GET | `/health` | 健康检查 |
 
 ### WebSocket
@@ -167,7 +220,11 @@ agent-web-refactor/
 │   ├── logger.py              # 日志
 │   ├── state.py               # LangGraph 状态
 │   ├── adapters.py            # Ollama / OpenAI 适配器
-│   ├── tools.py               # 搜索 + PC 控制
+│   ├── tools.py               # 搜索 + PC 控制 + 工具注册
+│   ├── assistant_tools.py     # 助手核心工具（提醒/时间/文件，沙箱）
+│   ├── reminder.py            # 日程/提醒引擎（存储 + 调度）
+│   ├── perception.py          # 感知层（时序/系统/情境/作息/情绪趋势）
+│   ├── user_profile.py        # 用户资料（昵称）
 │   ├── memory/                # 五层记忆（vector_store + memory_manager）
 │   ├── emotion/               # 情感 + 好感度（emotion / affection / emotion_store）
 │   ├── role/                  # 角色管理（manager.py）
@@ -260,7 +317,7 @@ role_generator/
 | `OLLAMA_HOST` | Ollama 地址 | `http://localhost:11434` |
 | `LLM_MODEL` | 主模型 | `qwen3.5:9b` |
 | `TOOL_LLM_MODEL` | 工具模型 | `qwen2.5:7b` |
-| `BAIDU_API_KEY` | 百度搜索 Key | 空（未配置时降级 B 站热搜） |
+| `BAIDU_API_KEY` | 百度搜索 Key（可选；配置后作为通用搜索的优先源） | 空（未配置时用 DuckDuckGo 通用搜索，不再降级成无关热榜） |
 | `BAIDU_API_SECRET` | ⚠️ 在 `.env`/`.env.example` 中存在但**代码当前未读取**（仅为预留） | 空 |
 | `EMBEDDING_MODEL_DIR` | 本地嵌入模型路径 | `models/all-MiniLM-L6-v2` |
 | `EMBEDDING_MODEL_NAME` | 嵌入模型联网名（本地路径不存在时回退下载用） | `all-MiniLM-L6-v2` |
@@ -271,8 +328,16 @@ role_generator/
 | `RERANKER_BACKEND` | 重排器后端：`bge`（bge-reranker-v2-m3，中英通用）/ `minilm`（旧 ms-marco）/ 留空自动 | `bge` |
 | `BGE_RERANKER_DIR` / `BGE_RERANKER_ONNX` | BGE 重排器目录与 ONNX 文件名 | `models/bge-reranker-v2-m3` / `model.onnx` |
 | `CROSS_ENCODER_ONNX_PATH` | 旧 ms-marco ONNX 路径（兜底） | `models/ms-marco-MiniLM-L-6-v2/...` |
-| `L3_ENABLED` | 启用 L3 主动信息池（采集+推送） | `false` |
+| `L3_ENABLED` | 启用 L3 主动信息池（采集+推送） | `true` |
 | `L3_UPDATE_INTERVAL` | L3 采集周期（秒） | `7200` |
 | `L3_PUSH_INTERVAL` | L3 推送/主动开口周期（秒） | `300` |
 | `L3_KEYWORDS` | 采集关键词（逗号分隔） | `天气,今日热点,二次元话题` |
 | `L3_MAX_ITEMS` | L3 池最大条目数 | `200` |
+| `REMINDER_SCAN_INTERVAL` | 提醒调度扫描间隔（秒） | `15` |
+| `REMINDER_FILE` | 提醒持久化文件 | `reminders.json` |
+| `PERCEPTION_ENABLED` | 启用感知层 | `true` |
+| `PERCEPTION_CITY` | 用户常驻城市（位置情境；可选） | 空 |
+| `PERCEPTION_FILE` | 感知数据（作息/情绪趋势）文件 | `perception.json` |
+| `MOOD_TREND_MAX_SAMPLES` | 情绪趋势保留样本数 | `200` |
+| `ROUTINE_WINDOW_DAYS` | 作息活跃窗口天数 | `30` |
+| `ASSISTANT_WORKSPACE_DIR` | 助手文件工具沙箱根目录 | `assistant_workspace` |

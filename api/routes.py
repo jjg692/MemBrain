@@ -89,6 +89,44 @@ def setup_routes(initializer: AppInitializer):
         saved = app.user_profile.set_nickname(user_id, nickname)
         return {"code": 0, "data": {"user_id": user_id, "nickname": saved}, "message": "已保存"}
 
+    # ===================== 日程/提醒 =====================
+
+    @router.get("/api/reminders")
+    async def list_reminders(user_id: str = Query(default="default_user"), include_done: bool = Query(default=False)):
+        """列出该用户的提醒。默认只返回未触发的"""
+        items = app.reminder_store.list(user_id, include_done=include_done)
+        return {"code": 0, "data": items}
+
+    @router.post("/api/reminders")
+    async def add_reminder(request: Request):
+        """新增提醒。body: {user_id?, text, trigger_at?, repeat?, weekdays?, role_id?}"""
+        body = await request.json()
+        user_id = body.get("user_id") or "default_user"
+        r = app.reminder_store.add(
+            user_id=user_id,
+            text=body.get("text") or "",
+            trigger_at=body.get("trigger_at") or "",
+            repeat=body.get("repeat") or "",
+            weekdays=body.get("weekdays"),
+            role_id=body.get("role_id") or "",
+        )
+        if r is None:
+            return {"code": -1, "message": "text 与 (trigger_at 或 repeat) 不能为空"}
+        return {"code": 0, "data": r, "message": "提醒已创建"}
+
+    @router.delete("/api/reminders/{reminder_id}")
+    async def delete_reminder(reminder_id: str, user_id: str = Query(default="default_user")):
+        ok = app.reminder_store.delete(user_id, reminder_id)
+        return {"code": 0 if ok else -1, "message": "已删除" if ok else "提醒不存在"}
+
+    @router.post("/api/reminders/{reminder_id}/toggle")
+    async def toggle_reminder(reminder_id: str, request: Request):
+        body = await request.json()
+        user_id = body.get("user_id") or "default_user"
+        enabled = bool(body.get("enabled", True))
+        ok = app.reminder_store.set_enabled(user_id, reminder_id, enabled)
+        return {"code": 0 if ok else -1, "message": "已更新" if ok else "提醒不存在"}
+
     # ===================== 群聊房间 =====================
 
     @router.get("/api/rooms")

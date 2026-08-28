@@ -16,3 +16,4 @@ class AgentState(TypedDict, total=False):
     image: Optional[str]                    # 可选图片（base64）
     iteration: int                          # 迭代计数（防死循环）
     room_context: Optional[str]             # 群聊 L0 上下文（可选）
+    persist_emotion: bool                   # 是否做情感分析/持久化（群聊接力=False）
