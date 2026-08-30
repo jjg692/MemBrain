@@ -19,4 +19,6 @@ user_profiles.json
 reminders.json
 perception.json
 
-/test/
+# 测试：纳入源码（test_*.py / conftest.py / README.md），排除生成物
+/test/__pycache__/
+/test/test_results.txt
