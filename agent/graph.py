@@ -52,6 +52,7 @@ class LangGraphMemoryAgent:
         system_prompt: Optional[str] = None,
         message_bus: Optional[MessageBus] = None,
         perception: Optional[object] = None,
+        tool_fallback: bool = True,
     ):
         self.memory = memory_manager
         self.role_manager = role_manager
@@ -59,6 +60,9 @@ class LangGraphMemoryAgent:
         self.role_id = role_id
         self.message_bus = message_bus
         self.perception = perception
+        # 兜底守卫开关：默认开启（真实 LLM 自治路由时，防止"说查不查"）。
+        # 单元测试验证假 LLM 的确定性链路时传 False，避免守卫干预。
+        self.tool_fallback = tool_fallback
 
         self.system_prompt = system_prompt or role_manager.load_prompt(role_id)
         # 默认用 LLMManager 按当前 provider 构建（本地 Ollama / 远程兼容均可），
@@ -231,10 +235,62 @@ class LangGraphMemoryAgent:
             msg = AIMessage(content=content, tool_calls=self._to_lc_tool_calls(tool_calls_raw))
             return {"messages": [msg], "iteration": state.get("iteration", 0) + 1}
 
+        # ---- 兜底守卫：模型"说要查却不查"时的可靠性补位 ----
+        # 自治路由把工具决定权交给 LLM，但本地模型偶发会只用口述承诺（如"让我帮你查一下天气"）
+        # 却不发起 tool_call，导致"说查不查"。这里做一层无害兜底：
+        #   当用户消息明显需要实时信息（天气/百科/联网查询），且本轮尚未真正执行过任何工具，
+        #   且模型没走工具就准备直接回答时，强制注入一次 search_web，让 tools 节点真正执行。
+        if (
+            self.tool_fallback
+            and self._needs_realtime(user_msg)
+            and not self._tool_executed_this_turn(state)
+            and state.get("iteration", 0) < 8
+        ):
+            forced = [{
+                "name": "search_web",
+                "args": {"query": user_msg},
+                "id": f"forced_search_{state.get('iteration', 0)}",
+            }]
+            msg = AIMessage(
+                content=content or "",
+                tool_calls=forced,
+            )
+            return {"messages": [msg], "iteration": state.get("iteration", 0) + 1}
+
         # 无工具：最终回复
         final_msg = AIMessage(content=content)
         self._after_reply(user_id, session, user_msg, content)
         return {"messages": [final_msg], "iteration": state.get("iteration", 0) + 1}
+
+    @staticmethod
+    def _needs_realtime(user_msg: str) -> bool:
+        """判断用户消息是否明确需要联网查实时/资料信息。
+
+        复用 core.tools._detect_intent 的轻量关键词路由（天气/百科/概念等），
+        避免再花一次 LLM 调用。**只对清晰的资料/天气意图触发兜底**；
+        "general"（含闲聊）不在此列，避免把纯闲聊也强制成搜索。
+        """
+        try:
+            from core.tools import _detect_intent
+            intent = _detect_intent(user_msg or "")
+            return intent in ("weather", "wiki")
+        except Exception:
+            return False
+
+    @staticmethod
+    def _tool_executed_this_turn(state: AgentState) -> bool:
+        """本轮状态中是否已出现过 ToolMessage（即工具已真正执行过）。
+
+        用于兜底守卫，防止模型反复不调用工具时无限循环注入。
+        """
+        for m in (state.get("messages") or []):
+            try:
+                from langchain_core.messages import ToolMessage
+                if isinstance(m, ToolMessage):
+                    return True
+            except Exception:
+                return False
+        return False
 
     def _route_after_agent(self, state: AgentState) -> str:
         if state.get("iteration", 0) > 8:
@@ -325,9 +381,15 @@ class LangGraphMemoryAgent:
                 pass
 
         lines.append(
-            "【我还能做到】有些事我可以偷偷帮你搞定，不用提：\n"
-            "- 想上网查实时信息（天气、新闻、最新动态）· 想让我帮你打开电脑上的应用或网页\n"
-            "要做这些时，像朋友一样自然地说出来就行，我自然会办好，不用特意说明在'用工具'。"
+            "【我还能做到】有些事我可以直接帮你办妥：\n"
+            "- 上网查实时信息（天气、新闻、最新动态、查询概念/资料）· 打开电脑上的应用或网页\n"
+            "- 我想和你聊天的当下这些功能，能不用'我在调工具'这种生硬话，自然地说话。\n"
+            "【重要：必须真正行动，不许空口承诺】\n"
+            "1. 用户明确要实时/最新信息时（如'今天天气''查一下XX''最新新闻'），你必须立刻调用 search_web "
+            "工具获取真实结果，而不是只说'我去帮你查一下'却不调用工具——『说要查却不查』等于说谎，绝不允许。\n"
+            "2. 调用工具后，等拿到真实结果再开口，把结果自然地转述给用户。\n"
+            "3. 为了自然，你可以先简单回应语气词再接工具调用，但工具调用这一步必须真正发生。\n"
+            "4. 只有用户确实不需要实时信息（闲聊、讲感受、回忆等）时才不调用工具、直接回答。"
         )
         if room_context:
             lines.append("【当前群聊上下文】\n" + room_context)

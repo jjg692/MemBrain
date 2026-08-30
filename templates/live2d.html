@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Live2D 桌面宠物</title>
+<!-- 本地优先、CDN 回退的运行时由 live2d-page.js 动态注入（index + core chunk 同目录） -->
+<link rel="stylesheet" href="/static/live2d/live2d.css">
+</head>
+<body>
+  <!-- 模型画布（L2Dwidget 会把 canvas 塞到这里） -->
+  <div id="live2d-canvas"></div>
+
+  <!-- 顶部控制条：返回 / 换模型 / 设置 -->
+  <div id="l2d-topbar" class="l2d-topbar hidden">
+    <button id="l2d-back" class="l2d-btn" title="返回主界面">‹</button>
+    <span id="l2d-model-name" class="l2d-model-name"></span>
+    <div class="l2d-topbar-right">
+      <button id="l2d-switch" class="l2d-btn" title="切换模型">◎</button>
+      <button id="l2d-toggle-panel" class="l2d-btn" title="面板">⋯</button>
+    </div>
+  </div>
+
+  <!-- 模型切换面板 -->
+  <div id="l2d-model-panel" class="l2d-model-panel hidden">
+    <h4>选择模型</h4>
+    <ul id="l2d-model-list" class="l2d-model-list"></ul>
+  </div>
+
+  <!-- 底部聊天气泡 -->
+  <div id="l2d-bubble" class="l2d-bubble hidden">
+    <div id="l2d-bubble-text" class="l2d-bubble-text"></div>
+    <div id="l2d-bubble-arrow"></div>
+  </div>
+
+  <!-- 底部输入条（点击气泡/角色浮现） -->
+  <div id="l2d-inputbar" class="l2d-inputbar hidden">
+    <input id="l2d-input" class="l2d-input" type="text" placeholder="和她说点什么…" autocomplete="off">
+    <button id="l2d-send" class="l2d-send">发送</button>
+  </div>
+
+  <!-- 加载状态 / 错误提示 -->
+  <div id="l2d-status" class="l2d-status hidden"></div>
+  <div id="l2d-error" class="l2d-error hidden">
+    <div class="l2d-error-msg"></div>
+    <button id="l2d-retry" class="l2d-btn">重试</button>
+  </div>
+
+  <!-- 扩展点锚点：未来可在此注入动捕/语音/情绪驱动组件，无需改页面逻辑 -->
+  <div id="l2d-ext"></div>
+
+<script src="/static/live2d/live2d-page.js"></script>
+</body>
+</html>

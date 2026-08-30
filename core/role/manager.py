@@ -24,6 +24,7 @@ class RoleConfig:
     avatar: str = ""
     default: bool = False
     description: str = ""
+    live2d_model: str = ""   # Live2D 模型路径（live2d/ 下的相对目录路径），留空用全局默认
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -52,6 +53,7 @@ class RoleManager:
                     avatar=item.get("avatar", ""),
                     default=item.get("default", False),
                     description=item.get("description", ""),
+                    live2d_model=item.get("live2d_model", ""),
                 )
                 self._roles[role.role_id] = role
         except Exception as e:
@@ -115,7 +117,7 @@ class RoleManager:
         )
 
     def create_role(self, role_id: str, display_name: str = "", prompt: str = "",
-                    description: str = "") -> Optional[RoleConfig]:
+                    description: str = "", live2d_model: str = "") -> Optional[RoleConfig]:
         if not role_id or role_id in self._roles:
             return None
         role = RoleConfig(
@@ -123,6 +125,7 @@ class RoleManager:
             display_name=display_name or role_id,
             prompt_file=f"role_prompt_{role_id}.txt",
             description=description,
+            live2d_model=live2d_model or "",
         )
         # 写入 prompt 文件
         self._write_prompt_file(role, prompt)
@@ -131,7 +134,8 @@ class RoleManager:
         return role
 
     def update_role(self, role_id: str, display_name: str = None, prompt: str = None,
-                    description: str = None, default: bool = None) -> bool:
+                    description: str = None, default: bool = None,
+                    live2d_model: str = None) -> bool:
         role = self._roles.get(role_id)
         if not role:
             return False
@@ -139,6 +143,8 @@ class RoleManager:
             role.display_name = display_name
         if description is not None:
             role.description = description
+        if live2d_model is not None:
+            role.live2d_model = live2d_model or ""
         if prompt is not None:
             self._write_prompt_file(role, prompt)
             self.reload_prompt(role_id)

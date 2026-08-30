@@ -35,6 +35,10 @@ def _open_browser():
 from api.routes import setup_routes
 app.include_router(setup_routes(initializer))
 
+# Live2D 桌面宠物（模型列表 API + 独立角色页 + 模型静态资源）
+from api.live2d import setup_live2d
+app.include_router(setup_live2d(app))
+
 # 后台管理
 app.include_router(admin.setup_admin(initializer))
 

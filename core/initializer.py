@@ -123,8 +123,7 @@ class AppInitializer:
     def _l3_push_callback(self, user_id: str, data: dict):
         """把主动消息推送到用户私聊 WS；在 async 上下文外调用，需调度到事件循环"""
         from api.websocket_manager import single_ws_manager
-        ws = single_ws_manager.get(user_id)
-        if ws is None:
+        if not single_ws_manager.user_ids():
             return
         try:
             # push 回调在后台线程调用；通过 asyncio 主循环推送

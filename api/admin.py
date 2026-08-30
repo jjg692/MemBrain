@@ -12,6 +12,7 @@ from fastapi import APIRouter, File, Request, UploadFile
 
 from core.config import ROLE_PROMPTS_DIR, get_config_snapshot, update_config
 from core.logger import log_error
+from api.live2d import _scan_models
 
 router = APIRouter(prefix="/admin")
 
@@ -29,6 +30,7 @@ def setup_admin(app):
             display_name=body.get("display_name", ""),
             prompt=body.get("prompt", ""),
             description=body.get("description", ""),
+            live2d_model=body.get("live2d_model", ""),
         )
         if not role:
             return {"code": -1, "message": "创建失败：role_id 为空或已存在"}
@@ -49,6 +51,7 @@ def setup_admin(app):
             prompt=body.get("prompt"),
             description=body.get("description"),
             default=body.get("default"),
+            live2d_model=body.get("live2d_model"),
         )
         if not ok:
             return {"code": -1, "message": "角色不存在"}
@@ -88,6 +91,54 @@ def setup_admin(app):
         body = await request.json()
         app.role_manager.update_role(role_id, default=body.get("default", True))
         return {"code": 0, "message": "已设置"}
+
+    # ===================== Live2D 模型路径（每角色） =====================
+
+    @router.get("/live2d/models")
+    async def live2d_model_list(role_id: str = ""):
+        """列出可选 Live2D 模型（live2d/ 下含 model.json 的目录相对路径），
+        供后台「浏览」按钮弹出选择框使用。
+
+        支持按角色过滤：若传入 role_id，只返回"属于该角色"的模型——
+          - 若该角色已配置 live2d_model，取其顶层目录（角色目录名）过滤同目录模型；
+          - 否则用 role_id 小写匹配模型路径顶层目录名小写（role_id 与目录名都是角色罗马音）。
+        不传 role_id 则返回全部。"""
+        models = _scan_models()
+        items = [{
+            "id": m["id"],
+            "name": m["name"],
+            "path": m["path"],
+            "model_url": m["model_url"],
+        } for m in models]
+
+        if role_id:
+            role = app.role_manager.get(role_id)
+            top_dir = ""
+            # 优先用已配置的 live2d_model 的顶层目录
+            if role and role.live2d_model:
+                top_dir = role.live2d_model.split("/", 1)[0].strip()
+            # 否则用 role_id 小写匹配目录名小写
+            if not top_dir:
+                rid_low = role_id.strip().lower()
+                dirs = {m["path"].split("/", 1)[0] for m in items if "/" in m["path"]}
+                for d in dirs:
+                    if rid_low and rid_low in d.lower():
+                        top_dir = d
+                        break
+            if top_dir:
+                items = [m for m in items if m["path"].split("/", 1)[0] == top_dir]
+
+        return {"code": 0, "data": items, "filter_dir": top_dir if role_id else ""}
+
+    @router.post("/roles/{role_id}/live2d")
+    async def set_role_live2d(role_id: str, request: Request):
+        """为角色设置 Live2D 模型路径。body: {live2d_model: "..."}"""
+        body = await request.json()
+        ok = app.role_manager.update_role(
+            role_id, live2d_model=body.get("live2d_model", ""))
+        if not ok:
+            return {"code": -1, "message": "角色不存在"}
+        return {"code": 0, "message": "已更新"}
 
     # ===================== 记忆查看 =====================
 

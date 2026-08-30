@@ -42,12 +42,20 @@ def register(app, initializer: AppInitializer):
     # ===================== 私聊 =====================
 
     @router.websocket("/ws/chat")
-    async def ws_chat(ws: WebSocket, user_id: str = "default_user", role_id: str = ""):
+    async def ws_chat(ws: WebSocket, user_id: str = "default_user", role_id: str = "", mode: str = "sender"):
+        """
+        私聊。
+        - mode=sender（默认，模型窗口）：接收用户输入，触发 agent 回复。
+        - mode=watcher（对话窗口）：只读，只接收转发的事件（thinking/reply/推送），
+          用于双窗口下其他窗口同步展示对话，不触发回复。
+        同一 user_id 可同时有一个 sender 和多个 watcher，事件会广播给所有人的连接。
+        """
         if not role_id:
             role_id = initializer.role_manager.get_default_role() or "kasumi"
-        await single_ws_manager.connect(user_id, ws)
+        is_sender = mode != "watcher"
+        await single_ws_manager.connect(user_id, ws, is_sender=is_sender)
         try:
-            await ws.send_json({"type": "connected", "user_id": user_id, "role_id": role_id})
+            await ws.send_json({"type": "connected", "user_id": user_id, "role_id": role_id, "mode": mode})
             while True:
                 raw = await ws.receive_text()
                 try:
@@ -57,29 +65,32 @@ def register(app, initializer: AppInitializer):
                 content = (data.get("content") or "").strip()
                 new_role = data.get("role_id") or role_id
                 image = data.get("image")
+                # watcher 只接收、不发送输入
+                if not is_sender:
+                    continue
                 if not content:
                     continue
 
                 agent = initializer.agent_factory.get_agent(user_id, new_role)
-                # 通知前端开始处理
-                await ws.send_json({"type": "thinking", "role_id": new_role})
+                # 通知前端开始处理（广播给该 user 的所有窗口）
+                await single_ws_manager.broadcast_to_user(user_id, {"type": "thinking", "role_id": new_role})
                 reply = await asyncio.get_event_loop().run_in_executor(
                     None, agent.chat, user_id, content, image
                 )
-                await ws.send_json({
+                await single_ws_manager.broadcast_to_user(user_id, {
                     "type": "reply",
                     "role_id": new_role,
                     "content": reply,
                 })
         except WebSocketDisconnect:
-            single_ws_manager.disconnect(user_id)
+            single_ws_manager.disconnect(user_id, ws)
         except Exception as e:
             log_error("WS", f"私聊异常: {e}")
             try:
                 await ws.close()
             except Exception:
                 pass
-            single_ws_manager.disconnect(user_id)
+            single_ws_manager.disconnect(user_id, ws)
 
     # ===================== 群聊 =====================
 

@@ -1,0 +1,227 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 50% 40%, #2a2a3a 0%, #14141c 70%, #0a0a10 100%);
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: #eaeaf2;
+  user-select: none;
+}
+/* 透明浮动模式（pywebview 透明窗口）：页面背景全透明，模型像浮在桌面上 */
+/* 注意：必须同时清 html 与 body 的深色渐变，否则窗口发黑 */
+html.transparent, body.transparent {
+  background: transparent !important;
+  background-image: none !important;
+}
+body.transparent #live2d-canvas { background: transparent !important; }
+body.transparent #live2d-widget { background: transparent !important; }
+
+/* ===== 浮动宠物模式（petmode：透明小窗只包模型） ===== */
+html.transparent, body.petmode { background: transparent !important; background-image: none !important; }
+body.petmode #live2d-canvas {
+  background: transparent !important;
+  position: fixed; inset: 0;
+}
+/* L2Dwidget 实际把 canvas 放到它自建的 #live2d-widget 容器里；这里真正定位它 */
+body.petmode #live2d-widget {
+  position: fixed !important;
+  left: 0 !important; top: 18% !important;
+  width: 100vw !important; height: 82vh !important;
+  background: transparent !important;
+  cursor: move;
+}
+body.petmode #live2d-widget canvas {
+  position: absolute !important;
+  left: 0 !important; top: 0 !important;
+  width: 100vw !important; height: 82vh !important;
+  transform-origin: 50% 50% !important;   /* 以中心缩放，滚轮缩放不会跑偏 */
+  cursor: move;
+}
+body.petmode #live2d-topbar,
+body.petmode #l2d-inputbar,
+body.petmode #l2d-model-panel { display: none !important; }
+/* 气泡在宠物模式放头顶：底端固定在角色头顶上方，文本变长时气泡向上生长，
+   绝不下探遮挡模型的头脸/身体。
+   约束：头顶上方净空间约 28vh（窗口高 * 0.28 ≈ 210px）。为此——
+   - 不设 max-height / 不滚动 / 不剪裁：让气泡随内容向上涨开；
+   - 长回复的"放不下的部分"由 JS 自动缩小字号(fitBubbleText)来塞进这段空间，
+     既不滚动也不被窗口顶裁掉。
+   使用固定宽度(而非 max-content)，保证字号测量(offsetHeight)稳定可预期。 */
+body.petmode .l2d-bubble {
+  top: auto;
+  bottom: 72%;                 /* 底边在窗口 28% 高度处（角色头顶上方） */
+  left: 50%;
+  transform: translateX(-50%);
+  width: 82%;                  /* 固定舒适宽度，长文本在其内换行、测量稳定 */
+  z-index: 20;
+}
+body.petmode .l2d-bubble-text {
+  font-size: 9px; padding: 7px 9px;   /* 原 14px/10px14px 整体缩至 65%；实际字号由 fitBubbleText 自适应 */
+  width: 100%;
+  max-width: 100%;
+  max-height: none; overflow: visible;     /* 不滚动、不剪裁 */
+  line-height: 1.5;
+  overflow-wrap: break-word; word-break: break-word;
+}
+body.petmode .l2d-bubble-text .l2d-empty {
+  display: block; height: 0; line-height: 0;   /* 保留语义但压缩空行高度 */
+}
+body.petmode .l2d-status { top: 20%; }
+
+/* 模型画布占满窗口 */
+#live2d-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%; height: 100%;
+  z-index: 1;
+}
+/* L2Dwidget 生成的画布容器：大窗模式下铺满窗口 */
+#live2d-widget {
+  position: fixed; inset: 0;
+  width: 100%; height: 100%;
+  z-index: 1;
+}
+#live2d-widget canvas {
+  display: block;
+  width: 100% !important; height: 100% !important;
+}
+
+/* 顶栏 */
+.l2d-topbar {
+  position: fixed; top: 0; left: 0; right: 0;
+  height: 52px; z-index: 30;
+  display: flex; align-items: center;
+  padding: 0 12px; gap: 8px;
+  background: linear-gradient(180deg, rgba(0,0,0,.55), transparent);
+}
+.l2d-topbar.hidden { display: none; }
+.l2d-model-name {
+  flex: 1; text-align: center;
+  font-size: 15px; font-weight: 600;
+  text-shadow: 0 1px 4px rgba(0,0,0,.6);
+  letter-spacing: 1px;
+}
+.l2d-topbar-right { display: flex; gap: 6px; }
+
+.l2d-btn {
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.2);
+  color: #fff; font-size: 18px; line-height: 1;
+  width: 36px; height: 36px; border-radius: 10px;
+  cursor: pointer;
+  transition: background .15s, transform .1s;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.l2d-btn:hover { background: rgba(255,255,255,.22); }
+.l2d-btn:active { transform: scale(.94); }
+
+/* 模型切换面板 */
+.l2d-model-panel {
+  position: fixed; top: 60px; right: 12px;
+  width: 220px; max-height: 60vh;
+  overflow-y: auto; z-index: 31;
+  background: rgba(24,24,32,.92);
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 14px;
+  padding: 12px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.5);
+  backdrop-filter: blur(8px);
+}
+.l2d-model-panel.hidden { display: none; }
+.l2d-model-panel h4 { font-size: 13px; color: #bbb; margin-bottom: 8px; }
+.l2d-model-list { list-style: none; }
+.l2d-model-list li {
+  padding: 9px 10px; border-radius: 9px;
+  cursor: pointer; font-size: 14px;
+  transition: background .15s;
+}
+.l2d-model-list li:hover { background: rgba(255,255,255,.1); }
+.l2d-model-list li.active { background: rgba(120,160,255,.22); color: #a9c2ff; }
+
+/* 聊天气泡 */
+.l2d-bubble {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 96px;
+  z-index: 20;
+  max-width: 78%;
+  min-width: 140px;
+  pointer-events: auto;
+}
+.l2d-bubble.hidden { display: none; }
+.l2d-bubble-text {
+  position: relative;
+  background: rgba(22,22,30,.92);
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 16px;
+  padding: 14px 18px;
+  font-size: 15px; line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-shadow: 0 6px 24px rgba(0,0,0,.45);
+  backdrop-filter: blur(6px);
+  max-height: 34vh; overflow-y: auto;
+}
+.l2d-bubble-arrow {
+  width: 0; height: 0;
+  border-left: 10px solid transparent;
+  border-right: 10px solid transparent;
+  border-top: 10px solid rgba(22,22,30,.92);
+  margin: 0 auto;
+}
+/* 打字中动画 */
+.l2d-bubble.typing .l2d-bubble-text::after {
+  content: "…"; display: inline-block;
+  animation: l2d-dots 1s steps(4,end) infinite;
+}
+@keyframes l2d-dots { 0%{content:"";} 25%{content:".";} 50%{content:"..";} 75%{content:"...";} }
+
+/* 输入条 */
+.l2d-inputbar {
+  position: fixed; left: 12px; right: 12px; bottom: 18px;
+  z-index: 25;
+  display: flex; gap: 8px; align-items: center;
+  background: rgba(24,24,32,.9);
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 24px;
+  padding: 6px 8px 6px 16px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 24px rgba(0,0,0,.4);
+}
+.l2d-inputbar.hidden { display: none; }
+.l2d-input {
+  flex: 1;
+  background: transparent; border: none; outline: none;
+  color: #fff; font-size: 15px;
+}
+.l2d-input::placeholder { color: #888; }
+.l2d-send {
+  background: linear-gradient(135deg, #6a8bff, #9b6aff);
+  color: #fff; border: none; border-radius: 20px;
+  padding: 9px 22px; font-size: 14px; font-weight: 600;
+  cursor: pointer; transition: filter .15s;
+}
+.l2d-send:hover { filter: brightness(1.1); }
+
+/* 状态 / 错误 */
+.l2d-status, .l2d-error {
+  position: fixed; left: 50%; top: 50%;
+  transform: translate(-50%,-50%);
+  z-index: 50; text-align: center;
+}
+.l2d-status { font-size: 15px; color: #ccc; }
+.l2d-error {
+  background: rgba(60,20,24,.92);
+  border: 1px solid rgba(255,120,120,.4);
+  border-radius: 14px; padding: 20px 26px; max-width: 80%;
+}
+.l2d-error-msg { font-size: 14px; margin-bottom: 14px; word-break: break-word; white-space: pre-wrap; }
+.l2d-error .l2d-btn { width: auto; padding: 0 18px; font-size: 13px; }
+.l2d-status.hidden, .l2d-error.hidden { display: none; }
+
+/* 移动端触控友好 */
+@media (max-width: 520px) {
+  .l2d-bubble { bottom: 92px; max-width: 88%; }
+  .l2d-bubble-text { font-size: 14px; padding: 12px 15px; }
+}

@@ -10,3 +10,13 @@ static/avatars/agents/*.png
 *.log
 .DS_Store
 .env
+
+# Live2D 模型数据（体积大、版权模型）：只忽略根目录 live2d/ 下的模型二进制，
+# 不忽略 static/live2d/runtime 下的运行时 JS（体积小、可入库便于离线）
+/live2d/
+# 运行时数据（用户昵称/提醒等本地持久化，不入库）
+user_profiles.json
+reminders.json
+perception.json
+
+/test/

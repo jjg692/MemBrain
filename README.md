@@ -6,6 +6,34 @@
 
 ---
 
+## 🆕 近期更新
+
+> 记录从上次 git 提交 `a130b1a`（感知层+日程提醒+助手工具+关系养成）以来的改动。
+
+### Live2D 桌面宠物（Qt 版）气泡与显示优化
+
+对 `desktop_pet_qt.py` 的透明悬浮 Live2D 宠物窗做了系列视觉与排版优化：
+
+- **气泡定位到角色头顶上方**：宠物窗内角色整体下移（`#live2d-widget`/canvas `top:18%`、`height:82vh`），并在头顶留出空间；聊天气泡底端固定在角色头顶上方（`bottom:72%`），不再遮挡角色头/脸/身体。
+- **长文本气泡向上生长、不滚动不裁切**：去掉气泡文本的 `max-height` + `overflow` 滚动盒，让气泡随内容自然向上涨开（`max-height:none`、`overflow:visible`）。
+- **气泡内去掉多余空行**：`cleanBubbleText` 折叠连续换行、去行尾空格，气泡内不再出现大段空白。
+- **长文本字号自适应**：`fitBubbleText` 在头顶净空间（窗口高约 26%）放不下时自动从基准字号逐步缩小，让全部文字塞进头顶空间（不滚动、不裁切）。
+- **整体缩至 65%**：宠物窗默认尺寸 `448×747 → 291×486`（aspect≈0.60 不变），气泡及气泡内字体同步缩小（14px→9px）；`BOTTOM_OFF=0` 保持，脚底仍紧贴任务栏上沿。
+- **气泡内不展示括号（动作/旁白）内容并合并为单行**：`cleanBubbleText` 去掉全角/半角括号内的动作或内心描写（可嵌套），并把所有换行合并为单个空格，交由气泡框架默认换行——应用端（聊天窗）回复仍保留完整括号内容，仅气泡为节省空间做了精简。
+
+### Live2D 桌面宠物（角色模型配置 + 自动切换）
+
+- **每角色可配置 Live2D 模型路径**：后台「联系人管理」每行新增「Live2D 模型」列。角色配置数据（`config/roles.json` 的 `RoleConfig`）新增 `live2d_model` 字段；`/api/contacts`、`/admin/roles` 均返回该字段，宠物页据此加载对应模型。
+- **按角色过滤可选模型**：`/admin/live2d/models?role_id=` 只返回属于该角色的模型——优先取该角色已配置 `live2d_model` 的顶层目录（角色目录名）过滤，未配置则用 role_id 小写匹配模型目录名小写（二者都是角色罗马音，如 `kasumi`↔`Toyama Kasumi`）。后台「浏览…」弹框只显示本角色模型，避免混淆。
+- **改模型自动生效（代替手动重启宠物窗）**：`live2d-page.js` 每 3 秒轮询 `/api/contacts`，检测到当前角色 `live2d_model` 变化后**整页刷新**自动加载新模型。⚠️ 必须整页刷新而非页内 `loadModel`：Cubism2 运行时在同一页面二次 `init` 会污染旧 WebGL 上下文（`object does not belong to this context`），画面会崩成三原色。
+- **默认宠物用户山香澄**（`roles.json` 中 `default:true` 且已配置其模型 `Toyama Kasumi/001_live_r_2023`）。
+
+### 其他
+
+- 移除遗留的调试临时文件（`_m1.png` / `_m2.png` / `_m3.png` / `_m1.log.out`）。
+
+---
+
 ## ✨ 核心能力
 
 | 功能 | 说明 |
@@ -173,6 +201,36 @@ python desktop_pet.py
 - 调试可单独启后端：`python desktop_pet.py --backend-only`。
 - 仅启后端、不自动弹浏览器：`MEMBRAIN_NO_BROWSER=1 python web_app.py`。
 
+### 🖥️ 桌面宠物（Qt 版，透明 Live2D 悬浮窗）
+
+在 pywebview 版之上，新增了基于 **PySide6 + QWebEngineView** 的 Qt 版（`desktop_pet_qt.py`），实现真正的**透明悬浮桌面宠物**：
+
+- **透明置顶**：`WA_TranslucentBackground` + 无边框 + 置顶 + 不接受焦点，只有角色立绘浮在桌面上（比 pywebview/WebView2 的透明 hack 更稳定，不会出白底）。
+- **双窗口架构**：透明宠物窗（只显示 Live2D 模型，视觉/动作/表情/口型）+ 独立交互窗（聊天 / 后台管理），两者共享同一后端与 WS。
+- **QWebChannel 桥 `petHost`**：`resizeWindow(w,h)`（滚轮缩放直接缩放宿主窗口、"窗口贴合模型"方案）、`setCursor`、`cropToChar`。
+- **对话联动**：情感关键词 → 模型动作/表情（`EMOTION_RULES`），说话过程驱动口型（`PARAM_MOUTH_OPEN_Y`），回复挂在 WS 的 reply 里。
+- **视线跟随**：自建 mousemove→rAF 链路直接写模型视线参数（上下已反），并 patch 运行时 `setDrag` 防止被每帧写回 0。
+- **后台管理入口**：点击 `target=_blank` 链接在 WebEngine 新窗口被阻止，已注入 JS 改为当前窗口内导航（`inline_links`）。
+
+**运行方式：**
+
+```bash
+# 需 Python 3.11（勿用裸 python 3.13）
+py -3.11 web_app.py              # 先启后端（端口 8000，/health 可查存活）
+py -3.11 desktop_pet_qt.py --pet  # 启宠物（透明悬浮单窗）
+# 其他模式：--window 大窗聊天 / --twin 双窗口 / --backend-only 仅启后端
+```
+
+**定位与缩放：** 宠物窗默认 `291×486`，相对工作区右下角偏移 `PET_RIGHT_OFF=31`、`PET_BOTTOM_OFF=0`（脚底紧贴任务栏上沿）；模型 `scale` 由 `live2d-page.js` 的 `floatScale()=0.909` 控制；滚轮在宠物窗内缩放模型（等价缩放窗口，保持贴合）。
+
+> ⚠️ **注意**：不能给窗口设 `--disable-gpu`（会毁掉 WebGL / Live2D 渲染）。调试窗口几何可用 `C:\Users\Administrator\AppData\Local\Temp\qsock\winrect.ps1`（Win32 枚举 pet 窗口）。
+
+**角色 ↔ Live2D 模型：**
+- 每个角色可在后台「联系人管理 → Live2D 模型」配置其模型路径（`live2d/` 下的相对目录），存于 `roles.json` 的 `live2d_model` 字段。
+- 「浏览…」弹框按角色过滤：只显示该角色目录下的模型（角色目录名与 role_id 均为角色罗马音，可互相匹配）。
+- 宠物页加载时优先用当前角色配置的模型；后台改模型后约 3 秒自动整页刷新生效（无需手动重启宠物窗）。
+- 默认宠物角色为用户山香澄（kasumi）。
+
 ---
 
 ## 🔌 API 一览
@@ -196,6 +254,16 @@ python desktop_pet.py
 | POST | `/api/reminders/{id}/toggle` | 启用/停用提醒 |
 | GET | `/health` | 健康检查 |
 
+#### Live2D（桌面宠物页）
+
+| 路径 | 说明 |
+|------|------|
+| GET | `/live2d?petmode=1` | Live2D 宠物页（透明小窗只包模型；`transparent=1` 透明背景） |
+| GET | `/live2d-chat` | 双窗口模式独立对话窗页（sender） |
+| GET | `/api/live2d/models` | 模型列表 + 默认模型 + 运行时本地/CDN 信息（目录扫描自动发现） |
+| GET | `/api/live2d/config` | 前端初始化所需渲染环境信息 |
+| GET | `/live2d-models/{path}/model.json` | 模型静态资源（`model.json`/`.moc`/纹理/动作，按模型目录挂载） |
+
 ### WebSocket
 | 路径 | 说明 |
 |------|------|
@@ -205,6 +273,12 @@ python desktop_pet.py
 ### 后台 API（`/admin/*`）
 联系人 CRUD、Prompt 读写、头像上传、记忆查看、情感/好感度、统计、配置修改。
 
+**Live2D 模型配置：**
+| 路径 | 说明 |
+|------|------|
+| GET | `/admin/live2d/models?role_id=` | 列出可选 Live2D 模型，可按角色过滤（只返回该角色目录下的模型） |
+| POST | `/admin/roles/{role_id}/live2d` | 设置某角色的 `live2d_model` 路径（body: `{live2d_model}`） |
+
 ---
 
 ## 📁 项目结构
@@ -212,6 +286,8 @@ python desktop_pet.py
 ```
 agent-web-refactor/
 ├── web_app.py                 # 入口
+├── desktop_pet.py             # 桌面宠物（pywebview 版）
+├── desktop_pet_qt.py          # 桌面宠物（Qt 版，PySide6 透明 Live2D 悬浮窗）
 ├── config/roles.json          # 角色配置
 ├── role_prompts/              # 角色 Prompt 文件
 ├── core/
@@ -236,9 +312,12 @@ agent-web-refactor/
 │   ├── routes.py              # HTTP
 │   ├── websocket.py           # WS
 │   ├── admin.py               # 后台
+│   ├── live2d.py              # Live2D 模型/运行时环境接口
 │   └── websocket_manager.py
-├── templates/                 # chat.html + admin.html
-├── static/                    # 静态资源/头像
+├── templates/                 # chat.html + admin.html + live2d.html + live2d-chat.html
+├── static/
+│   ├── live2d/                # Live2D 宠物页（live2d-page.js / live2d.css / runtime/）
+│   └── ...                    # 其他静态资源/头像
 ├── models/                    # 本地嵌入模型
 └── chromadb/                  # 数据目录（运行时生成）
 ```
@@ -341,3 +420,7 @@ role_generator/
 | `MOOD_TREND_MAX_SAMPLES` | 情绪趋势保留样本数 | `200` |
 | `ROUTINE_WINDOW_DAYS` | 作息活跃窗口天数 | `30` |
 | `ASSISTANT_WORKSPACE_DIR` | 助手文件工具沙箱根目录 | `assistant_workspace` |
+| `LIVE2D_ENABLED` | 启用 Live2D 桌面宠物页/接口 | `true` |
+| `LIVE2D_MODEL_ROOT` | Live2D 模型根目录（扫描含 `model.json` 的目录即一个模型） | `live2d` |
+| `LIVE2D_RENDERER` | Live2D 渲染器（当前支持 `l2dwidget`，Cubism2） | `l2dwidget` |
+| `LIVE2D_DEFAULT_MODEL` | 默认选中模型（相对 `LIVE2D_MODEL_ROOT` 的目录路径，留空取扫描到第一个） | 空 |

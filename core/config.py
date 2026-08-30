@@ -121,6 +121,17 @@ PERCEPTION_FILE = str(Path(PROJECT_ROOT) / os.getenv("PERCEPTION_FILE", "percept
 MOOD_TREND_MAX_SAMPLES = _int(os.getenv("MOOD_TREND_MAX_SAMPLES"), 200)
 ROUTINE_WINDOW_DAYS = _int(os.getenv("ROUTINE_WINDOW_DAYS"), 30)
 
+# ===================== Live2D（桌面宠物模型） =====================
+# 模型根目录：此目录下每个子目录视为一个可用模型（内含 model.json）
+LIVE2D_MODEL_ROOT = str(Path(PROJECT_ROOT) / os.getenv("LIVE2D_MODEL_ROOT", "live2d"))
+# 运行时类型：l2dwidget（live2d-widget.js，Cubism2 .moc；当前唯一启用）
+# 预留：以后可切换 pixi-live2d-display / 自研渲染器，通过渲染器适配层接入
+LIVE2D_RENDERER = os.getenv("LIVE2D_RENDERER", "l2dwidget").strip().lower()
+# 默认选中哪个模型（目录相对 LIVE2D_MODEL_ROOT 的路径，含 model.json 的目录）
+LIVE2D_DEFAULT_MODEL = os.getenv("LIVE2D_DEFAULT_MODEL", "").strip()
+# 是否启用 Live2D 独立页 / 模型请求（false 可整体关闭）
+LIVE2D_ENABLED = _bool(os.getenv("LIVE2D_ENABLED", "true"))
+
 # ===================== 助手工具（文件沙箱） =====================
 # 角色可读写的沙箱根目录（read_file/write_file/list_files 仅限此目录及 uploads）
 ASSISTANT_WORKSPACE_DIR = str(Path(PROJECT_ROOT) / os.getenv("ASSISTANT_WORKSPACE_DIR", "assistant_workspace"))
