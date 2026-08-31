@@ -59,6 +59,18 @@ def _detect_intent(query: str) -> str:
     return "general"
 
 
+# 明确的"设提醒"触发词（供 tool_fallback 兜底守卫使用）。
+# 刻意**保守**：只匹配明确的"提醒/设提醒/定时"等表述，
+# 不包含裸"记"字（否则"记得/记忆"等闲聊会被误判成要设提醒）。
+REMIND_HINTS = ["提醒", "设提醒", "别忘", "到点", "定时", "设个提醒", "帮我记一下"]
+
+
+def _detect_remind(query: str) -> bool:
+    """是否明确表达了「要设提醒」的意图（供 git 兜底守卫强制注入 remind_me）。"""
+    q = (query or "").lower()
+    return any(h in q for h in REMIND_HINTS)
+
+
 # ===================== search_web 主入口 =====================
 
 def search_web(query: str) -> str:

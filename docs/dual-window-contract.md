@@ -189,7 +189,7 @@ ALL_TOOLS.append({"type":"function","function":{...}})   # 或经辅助函数 ad
 |------|---------|
 | 工具注册/调用闭环 | `test*/test_tool_execution.py`、`test/deepseek/test_tool_timing.py` |
 | tool_fallback 兜底 | `test/deepseek/test_tool_timing.py::test_fallback_*` |
-| 语义自然度/记忆/指代 | `test*/test_semantic_live.py`（两后端） |
+| 语义自然度/记忆/指代 | `test*/test_semantic_live_ollama.py`、`test*/test_semantic_live_deepseek.py`（两后端） |
 | 对话/记忆/情感机制 | `test*/test_conversation.py`、`test_memory.py`、`test_emotion_perception.py` |
 | **新增 behavior 事件**（窗口A/B共同必须） | 新增 `test/behavior_test.py`：`BehaviorMapper.derive` 纯函数单测 + WS 事件含 `behavior` 的集成断言 |
 | **M2 任务循环**（窗口A） | 新增 `test/task_loop_test.py`：`TaskPlanner` 纯函数分界 + agent 集成（plan 建立/observe 累积/收敛 done）+ 单轮/闲聊不触发不回归 |

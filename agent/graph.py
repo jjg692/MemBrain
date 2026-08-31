@@ -266,27 +266,37 @@ class LangGraphMemoryAgent:
                     "plan": plan, "task_status": task_status}
 
         # ---- 兜底守卫：模型"说要查却不查"时的可靠性补位 ----
-        # 自治路由把工具决定权交给 LLM，但本地模型偶发会只用口述承诺（如"让我帮你查一下天气"）
-        # 却不发起 tool_call，导致"说查不查"。这里做一层无害兜底：
-        #   当用户消息明显需要实时信息（天气/百科/联网查询），且本轮尚未真正执行过任何工具，
-        #   且模型没走工具就准备直接回答时，强制注入一次 search_web，让 tools 节点真正执行。
+        # 自治路由把工具决定权交给 LLM，但本地/远程模型偶发会只用口述承诺
+        # （如"让我帮你查一下天气"、”我去给你设个提醒”）却不发起 tool_call，
+        # 导致"说查不查 / 说提醒不提醒"。这里做一层无害兜底：
+        #   当用户消息明显需要实时信息（天气/百科/联网查询）或明确要求设提醒，
+        #   且本轮尚未真正执行过任何工具，且模型没走工具就准备直接回答时，
+        #   强制注入一次对应工具，让 tools 节点真正执行。
         if (
             self.tool_fallback
-            and self._needs_realtime(user_msg)
             and not self._tool_executed_this_turn(state)
             and state.get("iteration", 0) < 8
         ):
-            forced = [{
-                "name": "search_web",
-                "args": {"query": user_msg},
-                "id": f"forced_search_{state.get('iteration', 0)}",
-            }]
-            msg = AIMessage(
-                content=content or "",
-                tool_calls=forced,
-            )
-            return {"messages": [msg], "iteration": state.get("iteration", 0) + 1,
-                    "plan": plan, "task_status": task_status}
+            forced = None
+            if self._needs_realtime(user_msg):
+                forced = [{
+                    "name": "search_web",
+                    "args": {"query": user_msg},
+                    "id": f"forced_search_{state.get('iteration', 0)}",
+                }]
+            elif self._needs_remind(user_msg):
+                forced = [{
+                    "name": "remind_me",
+                    "args": {"text": user_msg, "when": ""},
+                    "id": f"forced_remind_{state.get('iteration', 0)}",
+                }]
+            if forced:
+                msg = AIMessage(
+                    content=content or "",
+                    tool_calls=forced,
+                )
+                return {"messages": [msg], "iteration": state.get("iteration", 0) + 1,
+                        "plan": plan, "task_status": task_status}
 
         # 无工具：最终回复（任务循环的完成确认 / 单轮的直接回复）
         final_msg = AIMessage(content=content)
@@ -310,6 +320,19 @@ class LangGraphMemoryAgent:
             from core.tools import _detect_intent
             intent = _detect_intent(user_msg or "")
             return intent in ("weather", "wiki")
+        except Exception:
+            return False
+
+    @staticmethod
+    def _needs_remind(user_msg: str) -> bool:
+        """判断用户消息是否明确要求设提醒（兜底守卫用）。
+
+        复用 core.tools._detect_remind 的保守词表（只认"提醒/设提醒/定时"等明确表述，
+        不含裸"记"字），避免把纯闲聊强制成 remind_me。
+        """
+        try:
+            from core.tools import _detect_remind
+            return _detect_remind(user_msg or "")
         except Exception:
             return False
 

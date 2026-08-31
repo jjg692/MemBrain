@@ -20,6 +20,59 @@ pytestmark = pytest.mark.usefixtures("fake_embedding")
 from test.deepseek.conftest import needs_remote
 
 
+def _build_remote_agent(tmp_path, monkeypatch):
+    """本地即时组装远程 Agent（不依赖预构建的 remote_agent fixture）。
+
+    为什么不用 remote_agent fixture：工具用例需要在「替换 TOOL_REGISTRY 桩」**之后**
+    才构造 Agent（_tool_registry_fns() 在构造时快照工具函数）。若先用 fixture 组好
+    Agent，其 ToolNode 持有的是真实(联网)工具，测试里的 stub 永远不会被调用，导致
+    `assert calls` 误失败。此处与 Ollama 侧 test_real_weather_prompt_triggers_search_web
+    的模式保持一致：先 monkeypatch.setitem 打桩，再 new 一个 LangGraphMemoryAgent。
+    """
+    from core.memory.vector_store import SimpleMemory
+    from core.memory.memory_manager import MemoryManager
+    from core.emotion import EmotionStore
+    from agent.graph import LangGraphMemoryAgent
+    from test.deepseek.conftest import make_role_manager
+
+    if not _remote_ready():
+        pytest.skip("远程 LLM 不可达")
+
+    monkeypatch.setattr("core.user_profile.USER_PROFILES_FILE", tmp_path / "up.json")
+    from core.llm_manager import LLMManager
+    mgr = LLMManager()
+    llm = mgr.build_llm_adapter()
+    tool_llm = mgr.build_tool_adapter()
+    for a in (llm, tool_llm):
+        if not hasattr(a, "set_temperature"):
+            a.set_temperature = lambda v: None
+
+    store = SimpleMemory(path=str(tmp_path / "chroma_remote"))
+    mngr = MemoryManager(store, tool_llm)
+    rm = make_role_manager("kasumi", "你是户山香澄，BanG Dream! Poppin'Party 的主唱和吉他手，元气、活泼、爱撒娇。")
+    es = EmotionStore(store)
+
+    class _PerceptionStub:
+        def record_user_activity(self, user_id): pass
+        def record_mood(self, user_id, *a, **k): pass
+        def summarize(self, user_id): return ""
+
+    ag = LangGraphMemoryAgent(
+        memory_manager=mngr, role_manager=rm, emotion_store=es, role_id="kasumi",
+        llm_adapter=llm, tool_adapter=tool_llm, perception=_PerceptionStub(),
+    )
+    return ag, mngr
+
+
+def _remote_ready() -> bool:
+    try:
+        from core.llm_manager import LLMManager
+        res = LLMManager.test_connection()
+        return bool(res and res.get("ok"))
+    except Exception:
+        return False
+
+
 def _is_ai_speak(text: str) -> bool:
     """检测机器腔 / 出戏 / 推理腔表述（DeepSeek-R1 是推理模型，更需排除'让我分析''（思考）'等）。"""
     ai_markers = ["我是AI", "作为AI", "我是助手", "请告诉我", "请问有什么可以帮您",
@@ -51,7 +104,7 @@ def test_real_reply_is_reasonably_long(remote_agent):
 # ===================== 2. 工具调用正确性（该调时调正确的工具） =====================
 
 @needs_remote
-def test_real_weather_triggers_search_web(remote_agent, monkeypatch):
+def test_real_weather_triggers_search_web(tmp_path, monkeypatch):
     import core.tools as T
     calls = []
 
@@ -61,7 +114,7 @@ def test_real_weather_triggers_search_web(remote_agent, monkeypatch):
         return "北京当前天气：晴，气温 26°C。"
 
     monkeypatch.setitem(T.TOOL_REGISTRY, "search_web", search_web)
-    ag, mngr = remote_agent
+    ag, mngr = _build_remote_agent(tmp_path, monkeypatch)
 
     reply = ag.chat("u1", "北京今天天气怎么样？")
     assert calls, "模型收到天气询问却未调用 search_web"
@@ -70,7 +123,7 @@ def test_real_weather_triggers_search_web(remote_agent, monkeypatch):
 
 
 @needs_remote
-def test_real_remind_intent_calls_remind_me(remote_agent, monkeypatch):
+def test_real_remind_intent_calls_remind_me(tmp_path, monkeypatch):
     """用户要求设提醒 -> 应调用 remind_me（而非盲目 search/web）。"""
     import core.tools as T
     calls = []
@@ -81,13 +134,11 @@ def test_real_remind_intent_calls_remind_me(remote_agent, monkeypatch):
         return f"已设置提醒：{text}"
 
     monkeypatch.setitem(T.TOOL_REGISTRY, "remind_me", remind_me)
-    ag, mngr = remote_agent
+    ag, mngr = _build_remote_agent(tmp_path, monkeypatch)
 
     reply = ag.chat("u1", "帮我设个提醒，明早八点提醒我喝药。")
     assert calls, "用户要求设提醒，模型却未调用 remind_me"
     assert any(("八点" in w or "8" in w or "提醒" in t) for (t, w) in calls) or any("喝药" in t for (t, w) in calls)
-    # 不该把该请求当搜索
-    calls_not_web = True
     assert reply and not reply.startswith("[")
 
 

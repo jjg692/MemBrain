@@ -179,6 +179,42 @@ def test_fallback_disabled_via_flag(tmp_path, monkeypatch, fake_embedding):
     assert search_calls == [], "关闭 fallback 后不应强制注入"
 
 
+def test_fallback_injects_remind_when_model_forgets(tmp_path, monkeypatch, fake_embedding):
+    """明确要求设提醒 + 模型不调工具 -> 守卫强制注入并执行 remind_me。"""
+    calls = []
+
+    def remind_me(text: str = "", when: str = "", repeat: str = "", user_id: str = "default_user") -> str:
+        """提醒桩。"""
+        calls.append((text, when))
+        return f"已设置提醒：{text}"
+
+    ag, llm, mngr = _build_agent(tmp_path, monkeypatch, fake_embedding,
+                            {"remind_me": remind_me}, tool_fallback=True)
+    # 第1次：模型"光说不做"（口述答应，无 tool_call）
+    llm.enqueue_tools("（这次模型没想着调工具，直接说'好勒我去给你设个提醒'）")
+    # 第2次：拿到 remind_me 结果后回复
+    llm.enqueue_tools("好嘞，记住了，明早八点叫你喝药！")
+    reply = ag.chat("u1", "帮我在明早八点设个提醒，提醒我喝药")
+    assert calls, "守卫应强制注入 remind_me"
+    assert reply == "好嘞，记住了，明早八点叫你喝药！"
+
+
+def test_fallback_not_inject_remind_for_casual(tmp_path, monkeypatch, fake_embedding):
+    """含"记"的纯闲聊（如'记得'）-> 不作为设提醒，守卫不注入。"""
+    calls = []
+
+    def remind_me(text: str = "", when: str = "", repeat: str = "", user_id: str = "default_user") -> str:
+        """提醒桩。"""
+        calls.append((text, when))
+        return "已设"
+
+    ag, llm, mngr = _build_agent(tmp_path, monkeypatch, fake_embedding,
+                            {"remind_me": remind_me}, tool_fallback=True)
+    llm.enqueue_tools("记得呀，那首歌的旋律我也超喜欢！")
+    reply = ag.chat("u1", "你还记得那首歌吗？我最喜欢它了")
+    assert calls == [], f"纯闲聊含'记得'却被误注入 remind_me"
+
+
 # ===================== C. 多工具编排 =====================
 
 def test_multi_tool_orchestration(tmp_path, monkeypatch, fake_embedding):
