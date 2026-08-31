@@ -36,6 +36,7 @@ from core.emotion import (
 )
 from core.role.manager import RoleManager
 from core.room.message_bus import MessageBus
+from core.behavior import BehaviorMapper
 
 
 class LangGraphMemoryAgent:
@@ -63,6 +64,8 @@ class LangGraphMemoryAgent:
         # 兜底守卫开关：默认开启（真实 LLM 自治路由时，防止"说查不查"）。
         # 单元测试验证假 LLM 的确定性链路时传 False，避免守卫干预。
         self.tool_fallback = tool_fallback
+        # 最近一次回复的行为事件（供 WS 层随 reply 一起广播；无副作用仅缓存）
+        self._last_behavior: Optional[Dict] = None
 
         self.system_prompt = system_prompt or role_manager.load_prompt(role_id)
         # 默认用 LLMManager 按当前 provider 构建（本地 Ollama / 远程兼容均可），
@@ -412,15 +415,33 @@ class LangGraphMemoryAgent:
         return out
 
     def _after_reply(self, user_id, session, user_msg, reply):
-        """记录 L1，异步存 L2 + L4"""
+        """记录 L1，异步存 L2 + L4；并计算/缓存本次回复的行为事件（behavior）。"""
         self.memory.add_to_l1(user_id, self.role_id, "user", user_msg)
         self.memory.add_to_l1(user_id, self.role_id, "assistant", reply)
+
+        # 行为事件：由纯函数 BehaviorMapper 基于会话情绪 + 回复文本推导（无副作用）。
+        # 缓存到实例，供 WS 层在广播 reply 时一并下发（契约 §3.2，向后兼容：壳未收到也不影响）。
+        try:
+            emotion_state = session.get("emotion")
+            self._last_behavior = BehaviorMapper.derive_from_state(reply, emotion_state)
+        except Exception:
+            self._last_behavior = None
 
         def worker():
             self.memory.save_short_term(user_id, self.role_id, user_msg, reply)
             self.memory.judge_and_extract_facts(user_id, self.role_id, user_msg, reply)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def last_behavior(self) -> Optional[Dict]:
+        """返回最近一次回复的 behavior 事件（供 WS 层随 reply 广播）。返回副本避免外部改动。"""
+        if self._last_behavior is None:
+            return None
+        try:
+            import copy
+            return copy.deepcopy(self._last_behavior)
+        except Exception:
+            return dict(self._last_behavior)
 
     def _persist_emotion(self, user_id, session):
         self.emotion_store.save_emotion(user_id, self.role_id, session["emotion"])
@@ -508,6 +529,11 @@ class LangGraphMemoryAgent:
                 return ""
             # 主动消息记入 L1（assistant 侧），便于后续对话接续
             self.memory.add_to_l1(user_id, self.role_id, "assistant", text)
+            # 主动开口同样推导 behavior（宠物壳可据此做表情/口型）
+            try:
+                self._last_behavior = BehaviorMapper.derive(text, session.get("emotion"))
+            except Exception:
+                self._last_behavior = None
             return text
         except Exception as e:
             log_error("Agent", f"proactive_message 失败: {e}")

@@ -82,6 +82,15 @@ def register(app, initializer: AppInitializer):
                     "role_id": new_role,
                     "content": reply,
                 })
+                # 行为事件（契约 §3.2）：由内核推导的表情/口型/动作，随 reply 一并下发。
+                # 向后兼容：若 agent 未产出 behavior（旧实现/异常），静默跳过，壳不受影响。
+                behavior = getattr(agent, "last_behavior", lambda: None)()
+                if behavior:
+                    await single_ws_manager.broadcast_to_user(user_id, {
+                        "type": "behavior",
+                        "role_id": new_role,
+                        **behavior,
+                    })
         except WebSocketDisconnect:
             single_ws_manager.disconnect(user_id, ws)
         except Exception as e:
