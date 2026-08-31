@@ -322,6 +322,8 @@
     if (!text) return;
     state.ws.send(JSON.stringify({ content: text }));
     showBubble("你：" + text, "user");
+    // 用户说话 → 角色轻声"倾听"反应（点头，增强生命感）
+    onUserSay();
     bus.emit("send", { content: text });
   }
 
@@ -665,15 +667,33 @@
   // ============================================================
   // 对话联动：情感识别 → 动作 / 表情 映射 + 文字转口型
   // ============================================================
-  // 情感分类（关键词法）→ 动作组 + 表情名。motion 取 `startMotion(group,0,FORCE)`。
+  // 情感分类（关键词法）→ 动作组 + 表情名 + 口型基准。
+  // mouth: 该情绪下说话的口型开合基准（0~1，越大嘴张越开）；
+  // speed: 该情绪下嘴动频率系数（开心/激动更快更"雀跃"，平静更缓）。
   var EMOTION_RULES = [
-    { keys: ["哈哈", "hhhh", "笑死", "太好笑", "233", "嘻嘻", "嘿嘿", "开心", "好高兴", "喜欢", "爱你", "好棒"], motion: ["smile01", "smile02", "laugh"], expr: "smile01" },
-    { keys: ["难过", "伤心", "哭", "呜呜", "难受", "委屈", "想哭", "好难过", "唉"], motion: ["cry01", "cry02", "sad01"], expr: "cry01" },
-    { keys: ["生气", "气死", "愤怒", "讨厌", "烦", "滚", "走开", "哼"], motion: ["angry01"], expr: "angry01" },
-    { keys: ["真的吗", "不会吧", "哇", "诶", "惊讶", "没想到", "吓", "什么?"], motion: ["surprised01", "surprised02"], expr: "surprised01" },
-    { keys: ["害羞", "不好意思", "脸红", "难为情", "羞", "讨厌啦"], motion: ["shame01"], expr: "shame01" },
-    { keys: ["", "嗯", "对", "好的", "是的", "明白", "知道了", "晚安", "再见", "拜拜"], motion: ["nod01", "nod02", "bye01"], expr: "default" },
+    { keys: ["哈哈", "hhhh", "笑死", "太好笑", "233", "嘻嘻", "嘿嘿", "开心", "好高兴", "喜欢", "爱你", "好棒"], motion: ["smile01", "smile02", "laugh"], expr: "smile01", mouth: 0.68, speed: 1.25 },
+    { keys: ["难过", "伤心", "哭", "呜呜", "难受", "委屈", "想哭", "好难过", "唉"], motion: ["cry01", "cry02", "sad01"], expr: "cry01", mouth: 0.35, speed: 0.85 },
+    { keys: ["生气", "气死", "愤怒", "讨厌", "烦", "滚", "走开", "哼"], motion: ["angry01"], expr: "angry01", mouth: 0.55, speed: 1.2 },
+    { keys: ["真的吗", "不会吧", "哇", "诶", "惊讶", "没想到", "吓", "什么?"], motion: ["surprised01", "surprised02"], expr: "surprised01", mouth: 0.8, speed: 1.4 },
+    { keys: ["害羞", "不好意思", "脸红", "难为情", "羞", "讨厌啦"], motion: ["shame01"], expr: "shame01", mouth: 0.3, speed: 0.75 },
+    { keys: ["", "嗯", "对", "好的", "是的", "明白", "知道了", "晚安", "再见", "拜拜"], motion: ["nod01", "nod02", "bye01"], expr: "default", mouth: 0.5, speed: 1.0 },
   ];
+
+  // 情绪主名 → 口型基准/频率（供 behavior.emotion.primary 联动，行为事件无 mouth_open 时用）
+  // 注意：这里 key 要与窗口A BehaviorMapper 可能下发的 primary 中文情绪名尽量对齐，
+  // 未命中时回退默认（0.5/1.0），不报错。
+  var EMOTION_MOUTH_MAP = {
+    "开心": { mouth: 0.68, speed: 1.25 },
+    "高兴": { mouth: 0.7, speed: 1.3 },
+    "兴奋": { mouth: 0.75, speed: 1.4 },
+    "惊讶": { mouth: 0.8, speed: 1.4 },
+    "难过": { mouth: 0.32, speed: 0.8 },
+    "伤心": { mouth: 0.3, speed: 0.8 },
+    "生气": { mouth: 0.5, speed: 1.15 },
+    "平静": { mouth: 0.5, speed: 1.0 },
+    "害羞": { mouth: 0.28, speed: 0.7 },
+    "困":   { mouth: 0.25, speed: 0.6 },
+  };
 
   function detectEmotion(text) {
     text = (text || "").toLowerCase();
@@ -688,7 +708,7 @@
   }
 
   var EMO = {
-    // 由用户文本选表情（开心/难过等），无匹配回 default
+    // 由文本选表情 + 情感动作，返回 {idx, mouth, speed}
     fromText: function (text) {
       var idx = detectEmotion(text);
       var rule = EMOTION_RULES[idx];
@@ -699,8 +719,10 @@
         if (g && renderer.motionGroups().indexOf(g) >= 0) {
           renderer.playMotion(g, 0, 3);
         }
+        return { idx: idx, mouth: rule.mouth != null ? rule.mouth : 0.55,
+                 speed: rule.speed != null ? rule.speed : 1.0 };
       }
-      return idx;
+      return { idx: "default", mouth: 0.55, speed: 1.0 };
     },
   };
 
@@ -730,15 +752,16 @@
     renderer.setMouth(Math.max(0.05, Math.min(1, open)));
     lipT.raf = requestAnimationFrame(lipTick);
   }
-  function lipSpeak(text, durMs, baseOpen) {
+  // 文字转口型：baseOpen=情绪对口型开合基准，speedMul=情绪对口型频率系数（情绪联动关键）。
+  function lipSpeak(text, durMs, baseOpen, speedMul) {
     var len = (text || "").length;
     if (!len) { lipStop(); return; }
     lipT.active = true;
     lipT.startTime = performance.now();
-    // behavior 提供的口型基准优先；否则用默认
-    if (typeof baseOpen === "number") lipT.baseOpen = Math.max(0.25, Math.min(0.9, baseOpen));
-    else lipT.baseOpen = 0.55;
-    lipT.speed = Math.max(1.5, Math.min(3, len / 12));
+    if (typeof baseOpen === "number") lipT.baseOpen = Math.max(0.2, Math.min(0.9, baseOpen));
+    else lipT.baseOpen = 0.5;
+    var mul = (typeof speedMul === "number") ? Math.max(0.5, Math.min(2, speedMul)) : 1.0;
+    lipT.speed = Math.max(1.5, Math.min(3.2, (len / 10) * mul));
     lipT.dur = durMs || Math.max(1500, Math.min(15000, len * 220));
     lipT.durEff = function () { return lipT.dur; };
     renderer.setLipSync(true);
@@ -751,11 +774,24 @@
     var used = false;
     var b = behavior || {};
     var groups = renderer.motionGroups();
+    var bEmotion = (b.emotion && b.emotion.primary) || "";
 
     // 1) 表情：behavior.expression 是 exp.json 名，优先直接用
     if (b.expression) {
       renderer.setExpression(b.expression);
       used = true;
+    } else if (bEmotion) {
+      // 无显式 expression，但有情绪名 → 尝试映射到已知表情（友好降级）
+      var emoRule = EMOTION_MOUTH_MAP[bEmotion];
+      if (!emoRule) {
+        // 从 EMOTION_RULES 里找 expr
+        for (var k in EMOTION_RULES) {
+          if (EMOTION_RULES[k].keys.indexOf(bEmotion) >= 0) {
+            renderer.setExpression(EMOTION_RULES[k].expr || "default");
+            break;
+          }
+        }
+      }
     }
 
     // 2) 动作：behavior.actions 数组，逐个播放存在的 mtn（存在即播，吸收未知名）
@@ -768,12 +804,15 @@
       });
     }
 
-    // 3) 口型：behavior.mouth_open 作为说话开合基准（0~1）
+    // 3) 口型：mouth_open 优先；否则用 emotion.primary 推导；否则默认 —— 表情与口型联动
     var baseOpen = (typeof b.mouth_open === "number") ? b.mouth_open : null;
-    if (baseOpen !== null) {
-      used = true;
+    var speedMul = null;
+    if (baseOpen === null && bEmotion) {
+      var em = EMOTION_MOUTH_MAP[bEmotion];
+      if (em) { baseOpen = em.mouth; speedMul = em.speed; }
     }
-    lipSpeak(text, undefined, baseOpen);
+    if (baseOpen !== null) used = true;
+    lipSpeak(text, undefined, baseOpen, speedMul);
 
     return used;
   }
@@ -784,15 +823,22 @@
     var hasBehavior = b && (
       b.expression ||
       (Array.isArray(b.actions) && b.actions.length) ||
-      typeof b.mouth_open === "number"
+      typeof b.mouth_open === "number" ||
+      (b.emotion && b.emotion.primary)
     );
     if (hasBehavior) {
       applyBehavior(b, text);
       return;
     }
-    // —— 回退：现有"前端猜"（关键词情感 → 表情动作；估口型）——
-    EMO.fromText(text);
-    lipSpeak(text);
+    // —— 回退：现有"前端猜"，情绪 → 表情 + 动作 + 同款口型（表情与口型联动）——
+    var emo = EMO.fromText(text);
+    lipSpeak(text, undefined, emo.mouth, emo.speed);
+  }
+
+  // 用户输入时角色轻微"倾听/感兴趣"反应（增强生命感，不改对话行为）
+  function onUserSay() {
+    var g = "nod01";
+    if (renderer.motionGroups().indexOf(g) >= 0) renderer.playMotion(g, 0, 2);
   }
 
   // ============================================================
