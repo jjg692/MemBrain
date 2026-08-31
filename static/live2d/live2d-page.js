@@ -73,6 +73,100 @@
   };
 
   // ============================================================
+  // 表现层配置 (PET_CFG) —— 待机 / 点击 / 口型全部可配置
+  // 合并优先级（低 → 高）：
+  //   默认值 < 后端 /api/live2d/config 的 pet 段 < window.Live2D.config.pet
+  //   < URL 参数 (pet_<key>, 扁平覆盖)
+  // 说明：这是表现层参数，不改契约事件；窗口A下发的 behavior 仍是最高优先级信源，
+  //       但 behavior 缺席时（前端猜回退）及待机/点击行为完全由这套配置驱动。
+  // ============================================================
+  var PET_CFG = {
+    lip: {
+      amp: 0.25,          // 口型正弦振幅（绕 baseOpen 摆动）
+      minOpen: 0.05,      // 口型最小开合
+      maxOpen: 1.0,       // 口型最大开合
+      baseDefault: 0.5,   // 无情绪/无 behavior 时的口型基准
+      minSpeed: 1.5,      // 嘴动频率下限（Hz 系数）
+      maxSpeed: 3.2,      // 嘴动频率上限
+      durPerChar: 220,    // 每字说话时长(ms)
+      minDur: 1500,       // 最短说话时长
+      maxDur: 15000,      // 最长说话时长
+      pitchRange: 0.9,    // pitch_hint 对嘴速的调制范围（pitch 高→嘴更快，低→更慢）
+    },
+    tap: {
+      enabled: true,      // 点击宠物响应开关
+      cooldown: 2500,     // 点击防抖(ms)
+      reactions: ["wink", "smile", "smile", "nod", "surprised", "wink"],
+    },
+    idle: {
+      enabled: true,      // 待机表现开关
+      loopMs: 9000,       // 待机动作间隔(ms)
+      idleMs: 3500,       // 距上次交互多久进入待机(ms)
+      actions: ["nod", "wink", "smile", "surprised", "shrug", "nod", "wink", "idle"],
+      moodChance: 0.5,    // 每次待机动作附带表情微变的概率
+      moodSleep: 0.28,    // 微变中"犯困"占比
+      moodSmile: 0.22,    // 微变中"微笑"占比
+      exprMs: 1800,       // 临时表情持续(ms)
+    },
+  };
+
+  // URL 参数扁平覆盖表：pet_<key> -> PET_CFG[section][field]
+  // 值类型由 PIC 推导（数值/布尔/字符串），逗号分隔的原数组用 JSON.parse 尝试。
+  function applyUrlPetCfg(cfg) {
+    var s2v = function (raw, hint) {
+      if (raw == null) return hint;
+      if (hint === true || hint === false) return raw === "true" || raw === "1";
+      if (typeof hint === "number") { var n = Number(raw); return isNaN(n) ? hint : n; }
+      return raw;   // 字符串
+    };
+    for (var i = 0; i < params_keys_pet.length; i++) {
+      var key = params_keys_pet[i];
+      var raw = params.get(key);                 // 如 pet_lip_amp
+      if (raw == null) continue;
+      var parts = key.slice(4).split("_");       // 去掉 pet_ 前缀，按 _ 分层
+      // 逐层下钻，最后一段是字段名
+      var cur = cfg;
+      var ok = true;
+      for (var j = 0; j < parts.length - 1; j++) { cur = cur[parts[j]]; if (!cur) { ok = false; break; } }
+      if (!ok) continue;
+      var field = parts[parts.length - 1];
+      if (!(field in cur)) continue;
+      cur[field] = s2v(raw, cur[field]);
+    }
+    return cfg;
+  }
+  // URL 中所有 pet_ 开头的参数名（供 applyUrlPetCfg 使用）
+  var params_keys_pet = [];
+  params.forEach(function (v, k) { if (k.indexOf("pet_") === 0) params_keys_pet.push(k); });
+
+  // 深层浅合并：把 src 合并进 dst（仅当 dst 有同名段/字段）。返回 dst。
+  function mergePetCfg(dst, src) {
+    if (!src || typeof src !== "object") return dst;
+    for (var k in dst) {
+      if (src[k] === undefined) continue;
+      if (dst[k] && typeof dst[k] === "object" && !Array.isArray(dst[k]) &&
+          src[k] && typeof src[k] === "object" && !Array.isArray(src[k])) {
+        mergePetCfg(dst[k], src[k]);
+      } else if (Array.isArray(dst[k]) && Array.isArray(src[k])) {
+        if (src[k].length) dst[k] = src[k].slice();
+      } else {
+        dst[k] = src[k];
+      }
+    }
+    return dst;
+  }
+
+  // 解析最终表现层配置：合并默认 + 后端 + window后门 + URL 参数
+  function resolvePetCfg(backendData) {
+    var cfg = JSON.parse(JSON.stringify(PET_CFG));           // 深拷贝默认
+    if (backendData && backendData.pet) mergePetCfg(cfg, backendData.pet);
+    var w = window.Live2D.config || {};
+    if (w.pet) mergePetCfg(cfg, w.pet);
+    applyUrlPetCfg(cfg);
+    return cfg;
+  }
+
+  // ============================================================
   // 渲染器适配层（换渲染器只改这一处）
   // 当前：live2d-widget.js（Cubism2）。抽象 load/destroy/playMotion/setExpression。
   // 未来接入 pixi-live2d-display（Cubism3）或自研渲染器时实现同一接口即可。
@@ -889,7 +983,8 @@
     startTime: 0,
     dur: 0,
     speed: 1,
-    baseOpen: 0.55,  // 说话时 mouth 开合基准（behavior 可覆盖）
+    pitch: 1,       // pitch_hint（>1 快高、<1 慢低），调制 mouth 韵律
+    baseOpen: 0.5,  // 说话时 mouth 开合基准（behavior 可覆盖）
   };
   function lipStop() {
     lipT.active = false;
@@ -901,22 +996,30 @@
     if (!lipT.active) return;
     var p = (now - lipT.startTime) / lipT.durEff();
     if (p > 1) { lipStop(); return; }
-    // 以 baseOpen 为中心叠加正弦开合；behavior 给的 mouth_open 越高，嘴越张开
-    var open = lipT.baseOpen + 0.25 * Math.abs(Math.sin(now / 90 * lipT.speed));
-    renderer.setMouth(Math.max(0.05, Math.min(1, open)));
+    var cfg = PET_CFG.lip;
+    // 以 baseOpen 为中心叠加正弦开合；behavior 给的 mouth_open 越高，嘴越张开。
+    // pitch 调制：pitch 高(欢快/激动) → 嘴动更快更"雀跃"，低(低落/平淡) → 更缓。
+    var effSpeed = lipT.speed * lipT.pitch;
+    var open = lipT.baseOpen + cfg.amp * Math.abs(Math.sin(now / 90 * effSpeed));
+    renderer.setMouth(Math.max(cfg.minOpen, Math.min(cfg.maxOpen, open)));
     lipT.raf = requestAnimationFrame(lipTick);
   }
-  // 文字转口型：baseOpen=情绪对口型开合基准，speedMul=情绪对口型频率系数（情绪联动关键）。
-  function lipSpeak(text, durMs, baseOpen, speedMul) {
+  // 文字转口型：baseOpen=情绪对口型开合基准，speedMul=情绪对口型频率系数，
+  // pitchHint=窗口A behavior.pitch_hint（>1 快高、<1 慢低）→ 真口型韵律联动。
+  function lipSpeak(text, durMs, baseOpen, speedMul, pitchHint) {
+    var cfg = PET_CFG.lip;
     var len = (text || "").length;
     if (!len) { lipStop(); return; }
     lipT.active = true;
     lipT.startTime = performance.now();
-    if (typeof baseOpen === "number") lipT.baseOpen = Math.max(0.2, Math.min(0.9, baseOpen));
-    else lipT.baseOpen = 0.5;
+    if (typeof baseOpen === "number") lipT.baseOpen = Math.max(cfg.minOpen, Math.min(cfg.maxOpen, baseOpen));
+    else lipT.baseOpen = cfg.baseDefault;
     var mul = (typeof speedMul === "number") ? Math.max(0.5, Math.min(2, speedMul)) : 1.0;
-    lipT.speed = Math.max(1.5, Math.min(3.2, (len / 10) * mul));
-    lipT.dur = durMs || Math.max(1500, Math.min(15000, len * 220));
+    lipT.speed = Math.max(cfg.minSpeed, Math.min(cfg.maxSpeed, (len / 10) * mul));
+    // pitch 归一化到 [1-pitchRange, 1+pitchRange]，避免过于夸张
+    var ph = (typeof pitchHint === "number" && isFinite(pitchHint)) ? pitchHint : 1;
+    lipT.pitch = Math.max(1 - cfg.pitchRange, Math.min(1 + cfg.pitchRange, ph));
+    lipT.dur = durMs || Math.max(cfg.minDur, Math.min(cfg.maxDur, len * cfg.durPerChar));
     lipT.durEff = function () { return lipT.dur; };
     renderer.setLipSync(true);
     if (!lipT.raf) { lipT.raf = requestAnimationFrame(lipTick); }
@@ -955,7 +1058,8 @@
       });
     }
 
-    // 3) 口型：mouth_open 优先；否则用 emotion.primary 推导；否则默认 —— 表情与口型联动
+    // 3) 口型：mouth_open 优先；否则用 emotion.primary 推导；否则默认 —— 表情与口型联动。
+    //    pitch_hint（窗口A下发的语音情感基调）融入口型韵律 → 真口型联动。
     var baseOpen = (typeof b.mouth_open === "number") ? b.mouth_open : null;
     var speedMul = null;
     if (baseOpen === null && bEmotion) {
@@ -963,7 +1067,7 @@
       if (em) { baseOpen = em.mouth; speedMul = em.speed; }
     }
     if (baseOpen !== null) used = true;
-    lipSpeak(text, undefined, baseOpen, speedMul);
+    lipSpeak(text, undefined, baseOpen, speedMul, b.pitch_hint);
 
     return used;
   }
@@ -1000,13 +1104,14 @@
   // （easy_drag 仅在用户拖动时拦截），故此处不加"拖动则忽略"逻辑，只做点击防抖。
   // ============================================================
   var tapT = { last: 0 };
-  var TAP_REACTIONS = ["wink", "smile", "smile", "nod", "surprised", "wink"];
   function onPetTap() {
+    if (!PET_CFG.tap.enabled) return;
     var now = Date.now();
-    if (now - tapT.last < 2500) return;   // 防抖：每 2.5s 至多一次
+    if (now - tapT.last < PET_CFG.tap.cooldown) return;   // 防抖
     tapT.last = now;
     // 随机挑一个轻反应（语义动作），并偶尔换一下表情
-    var pick = TAP_REACTIONS[Math.floor(Math.random() * TAP_REACTIONS.length)];
+    var reactions = PET_CFG.tap.reactions || ["wink"];
+    var pick = reactions[Math.floor(Math.random() * reactions.length)];
     playAction(pick, 4);                 // 高优先级（点它就是想让它有反应）
     if (pick === "surprised") setExpressionTimed("surprised", 1200);
     else if (pick === "wink") setExpressionTimed("smile", 900);
@@ -1016,14 +1121,11 @@
 
   // ============================================================
   // 待机表现（长时间无交互/无对话 → 宠物自然"活着"）
-  // - 每 IDLE_LOOP_MS 随机播放一个轻待机动作（低优先级，不打断主动行为）
-  // - 附带随机表情微变（如困→眨眼→回归），由 idleTick 驱动并回正 lastExpression
+  // - 每 cfg.idle.loopMs 随机播放一个轻待机动作（低优先级，不打断主动行为）
+  // - 附带随机表情微变（如困→眨眼→回归），由 setExpressionTimed 回正 lastExpression
   // - 一旦用户交互/收到消息，立即重置"无交互计时"（避免说话时乱动）
   // - 通过 bus.on("activity") 由 sendText/onRoleTalk/onPetTap 触发 reset
   // ============================================================
-  var IDLE_LOOP_MS = 9000;        // 待机动作间隔（无交互时）
-  var IDLE_IDLE_MS = 3500;        // 距上次交互多久后进入待机循环
-  var IDLE_ACTIONS = ["nod", "wink", "smile", "surprised", "shrug", "nod", "wink", "idle"];
   var idleT = {
     timer: 0,
     lastActivity: 0,
@@ -1035,29 +1137,36 @@
     idleT.started = false;         // 重新进入待机倒计时
   }
   function startIdle() {
+    if (!PET_CFG.idle.enabled) return;
     if (idleT.timer || !renderer.available()) return;
     // 观察所有"活动"信号并重置待机倒计时
     bus.on("activity", idleReset);
     idleReset();
+    var icfg = PET_CFG.idle;
     idleT.timer = setInterval(function () {
-      // 距上次交互不足 IDLE_IDLE_MS → 保持安静（进入期）
-      if (Date.now() - idleT.lastActivity < IDLE_IDLE_MS) { idleT.started = true; return; }
+      // 待机被再次禁用 → 停掉
+      if (!PET_CFG.idle.enabled) { clearInterval(idleT.timer); idleT.timer = 0; return; }
+      // 距上次交互不足 idleMs → 保持安静（进入期）
+      if (Date.now() - idleT.lastActivity < icfg.idleMs) { idleT.started = true; return; }
       // 说话中不动（lipT.active 表示正在开口）
       if (lipT.active) return;
       // 随机待机动作（低优先级 2，不打断 3/4 的主动行为）
-      var act = IDLE_ACTIONS[idleT.idx % IDLE_ACTIONS.length];
+      var actions = icfg.actions || ["nod"];
+      var act = actions[idleT.idx % actions.length];
       idleT.idx++;
-      // 偶发表情微变 + 恢复（借助 respire 的表情微调）
-      var nowExprT = setIdleMood();
+      // 偶发表情微变 + 恢复（借助 setExpressionTimed 的表情微调）
+      setIdleMood();
       playAction(act, 2);
       bus.emit("idle", { action: act });
-    }, IDLE_LOOP_MS);
+    }, icfg.loopMs);
   }
   // 待机时的表情微变（偶尔困/眨眼，之后回正）
   function setIdleMood() {
+    var icfg = PET_CFG.idle;
+    if (Math.random() >= icfg.moodChance) return null;   // 本次不带表情微变
     var r = Math.random();
-    if (r < 0.28) return setExpressionTimed("sleep", 2500);    // 偶尔打个哈欠/犯困表情
-    if (r < 0.5) return setExpressionTimed("smile", 1800);     // 偶尔微笑
+    if (r < icfg.moodSleep) return setExpressionTimed("sleep", icfg.exprMs + 700);  // 偶尔犯困
+    if (r < icfg.moodSleep + icfg.moodSmile) return setExpressionTimed("smile", icfg.exprMs); // 偶尔微笑
     return null;                                               // 保持当前
   }
 
@@ -1125,6 +1234,16 @@
       if (j.code !== 0) throw new Error(j.message || "接口异常");
       state.config = j.data;
       state.models = j.data.models;
+
+      // 1.5) 解析表现层配置（默认 + 后端 /api/live2d/config.pet + window后门 + URL 参数）
+      // 后端 config 拉取失败时静默降级到默认 + URL + window 后门配置。
+      var backendPet = null;
+      try {
+        var cr = await fetch("/api/live2d/config", { cache: "no-store" });
+        var cj = await cr.json();
+        if (cj.code === 0 && cj.data && cj.data.pet) backendPet = cj.data.pet;
+      } catch (e) {}
+      PET_CFG = resolvePetCfg(backendPet ? { pet: backendPet } : null);
 
       // 2) 确定角色（URL role_id > 默认角色），并读取该角色配置的 Live2D 模型路径
       var roleLive2d = "";
@@ -1274,7 +1393,7 @@
   window.Live2D.setRole = function (r) { state.role_id = r; connectWS(); };
   // 对话联动后门
   window.Live2D.emotion = function (t) { EMO.fromText(t); };
-  window.Live2D.speak = function (t) { lipSpeak(t); };
+  window.Live2D.speak = function (t, dur, base, speed, pitch) { lipSpeak(t, dur, base, speed, pitch); };
   window.Live2D.stopSpeak = lipStop;
   window.Live2D.motions = function () { return motionGroups(); };
   window.Live2D._setCursor = setCursor;
@@ -1290,6 +1409,11 @@
   window.Live2D.applyBehavior = applyBehavior;
   window.Live2D.onRoleTalk = onRoleTalk;
   window.Live2D.emoFromText = function (t) { return EMO.fromText(t); };
+  // 表现层配置后门：读取 / 运行时重解析 / 应用（供外部脚本或调试面板）
+  window.Live2D.cfg = function () { return PET_CFG; };
+  window.Live2D.resolvePetCfg = function (b) { return resolvePetCfg(b); };
+  window.Live2D.setCfg = function (c) { if (c && typeof c === "object") PET_CFG = c; return PET_CFG; };
+  window.Live2D.lip = function () { return lipT; };   // 只读口型状态（含 baseOpen/speed/pitch）
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
