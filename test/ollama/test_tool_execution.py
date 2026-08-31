@@ -27,7 +27,7 @@ from core.memory.vector_store import SimpleMemory
 from core.memory.memory_manager import MemoryManager
 from core.emotion import EmotionStore
 from agent.graph import LangGraphMemoryAgent
-from test.conftest import make_role_manager
+from test.ollama.conftest import make_role_manager
 
 
 def _build_agent(tmp_path, monkeypatch, fake_embedding, tool_fn_map, llm_fake, tool_fake):

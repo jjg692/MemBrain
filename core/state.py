@@ -17,3 +17,6 @@ class AgentState(TypedDict, total=False):
     iteration: int                          # 迭代计数（防死循环）
     room_context: Optional[str]             # 群聊 L0 上下文（可选）
     persist_emotion: bool                   # 是否做情感分析/持久化（群聊接力=False）
+    # --- M2 任务循环（plan → act → observe） ---
+    plan: Optional[Dict]                    # 多步任务骨架（TaskPlan.to_dict()），None=单轮
+    task_status: Optional[Dict]             # 任务执行状态（observations/progress/done）

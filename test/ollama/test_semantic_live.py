@@ -42,7 +42,7 @@ def real_agent(tmp_path, monkeypatch, fake_embedding):
     from core.emotion import EmotionStore
     from agent.graph import LangGraphMemoryAgent
     from core.config import LLM_MODEL, TOOL_LLM_MODEL, OLLAMA_HOST, LLM_TEMPERATURE
-    from test.conftest import make_role_manager
+    from test.ollama.conftest import make_role_manager
 
     monkeypatch.setattr("core.user_profile.USER_PROFILES_FILE", tmp_path / "up.json")
 
@@ -123,7 +123,7 @@ def test_real_weather_prompt_triggers_search_web(tmp_path, monkeypatch, fake_emb
     from core.emotion import EmotionStore
     from agent.graph import LangGraphMemoryAgent
     from core.config import LLM_MODEL, TOOL_LLM_MODEL, OLLAMA_HOST, LLM_TEMPERATURE
-    from test.conftest import make_role_manager
+    from test.ollama.conftest import make_role_manager
 
     store = SimpleMemory(path=str(tmp_path / "chroma_w"))
     llm = OllamaAdapter(model=LLM_MODEL, host=OLLAMA_HOST); llm.set_temperature(0.2)
@@ -170,7 +170,7 @@ def test_real_casual_chat_does_not_call_web(tmp_path, monkeypatch, fake_embeddin
     from core.emotion import EmotionStore
     from agent.graph import LangGraphMemoryAgent
     from core.config import LLM_MODEL, TOOL_LLM_MODEL, OLLAMA_HOST, LLM_TEMPERATURE
-    from test.conftest import make_role_manager
+    from test.ollama.conftest import make_role_manager
 
     store = SimpleMemory(path=str(tmp_path / "chroma_c"))
     llm = OllamaAdapter(model=LLM_MODEL, host=OLLAMA_HOST); llm.set_temperature(0.2)

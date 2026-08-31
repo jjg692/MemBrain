@@ -47,6 +47,7 @@
 **A. 长程自主性 / 目标驱动（最大差距）**
 - ❌ 目前是被动 ReAct：用户给一句回一句，无「任务/目标」概念。
 - ✅ 待办：引入**任务循环**——多步目标规划（先拆解→逐步执行→完成确认），由 LLM 规划 + 工具执行 + 中途修正；可复用现有 LangGraph，加 `plan → act → observe` 边。
+- ✅ **M2 已落地**（窗口A）：`agent/planner.py` 引入确定性 `TaskPlanner`（纯函数，不新增 LLM 调用），分界「简单一句消费」vs「多步任务」（≥2 个不同工具意图即进入任务循环）；`agent/graph.py` 加入 `observe` 节点（tools → observe → agent）累积中间观察，最终收敛 `task_status.done + conclusion`。单轮/闲聊请求完全不进任务分支（既有测试全绿）。
 
 **B. 更强工具生态**
 - ❌ 目前 9 个内置工具 + MCP 骨架（未接任何真实 server）。
@@ -165,6 +166,19 @@ ALL_TOOLS.append({"type":"function","function":{...}})   # 或经辅助函数 ad
 ```
 > 约定：共用 `ALL_TOOLS` 变更走本文件登记；MCP 工具由 `tools.py` 启动时自动注册，无需手改。
 
+### 3.5 任务循环接口（窗口A M2，内核内部契约）
+> 窗口A 在 `agent/graph.py` 内部增加 `plan → act → observe` 闭环，**不改变 WS 事件面**
+> （对外仍只广播 `reply`/`behavior` 等既有事件）。本小节登记的是内核侧状态契约，供测试锁定：
+
+| 状态字段（AgentState） | 含义 |
+|------|------|
+| `plan` | 多步任务骨架 `{goal, source, steps:[{index,description,tool_hint,status}]}`；`None`=单轮 |
+| `task_status` | 执行状态 `{observations:[{tool_call_id,result}], progress:{done,total}, done:bool, conclusion:str}` |
+
+分界规则（`agent/planner.py::TaskPlanner.should_plan`）：消息命中 **≥2 个不同工具意图**才进入任务循环；
+单个工具请求 / 纯闲聊不触发，保持既有单轮行为。执行仍由 LLM 在现有 ReAct 循环里自主路由，
+`observe` 节点（tools → observe → agent）只累积中间结果，不改变执行路径。
+
 ---
 
 ## 4. 测试锁定项（改接口的防线）
@@ -178,6 +192,7 @@ ALL_TOOLS.append({"type":"function","function":{...}})   # 或经辅助函数 ad
 | 语义自然度/记忆/指代 | `test*/test_semantic_live.py`（两后端） |
 | 对话/记忆/情感机制 | `test*/test_conversation.py`、`test_memory.py`、`test_emotion_perception.py` |
 | **新增 behavior 事件**（窗口A/B共同必须） | 新增 `test/behavior_test.py`：`BehaviorMapper.derive` 纯函数单测 + WS 事件含 `behavior` 的集成断言 |
+| **M2 任务循环**（窗口A） | 新增 `test/task_loop_test.py`：`TaskPlanner` 纯函数分界 + agent 集成（plan 建立/observe 累积/收敛 done）+ 单轮/闲聊不触发不回归 |
 
 **合并防线**：任何一方改了 §3 的契约 → 提交前必须 `python -m pytest test/`（对应后端子集）全绿，
 且行为事件相关测试通过，才允许 merge。
@@ -203,7 +218,7 @@ ALL_TOOLS.append({"type":"function","function":{...}})   # 或经辅助函数 ad
 | 阶段 | 窗口A | 窗口B | 验收 |
 |------|-------|-------|------|
 | M1 | 行为事件 `behavior` + `BehaviorMapper` | 消费 `behavior` 驱动表情/口型（含向后兼容回退） | 对话时立绘表情/口型随情绪变化 |
-| M2 | 任务循环（多步目标） | 语音 TTS + 口型联动（mouth_open） | 能说整句且口型同步 |
+| M2 | **✅ 任务循环（多步目标）**：`agent/planner.py` + 图 `observe` 节点 | 语音 TTS + 口型联动（mouth_open） | 能说整句且口型同步；多步请求逐步完成并确认 |
 | M3 | 接 1 个真实 MCP + 目标记忆 | 微交互（点击/拖拽/情绪动作库） | 具备"助手感 + 生命感" |
 | M4 | 可观测/轨迹 + 多模态扩展 | 听觉闭环（ASR） | 完整桌面宠物助手 |
 

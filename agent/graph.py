@@ -37,6 +37,7 @@ from core.emotion import (
 from core.role.manager import RoleManager
 from core.room.message_bus import MessageBus
 from core.behavior import BehaviorMapper
+from agent.planner import TaskPlanner
 
 
 class LangGraphMemoryAgent:
@@ -66,6 +67,11 @@ class LangGraphMemoryAgent:
         self.tool_fallback = tool_fallback
         # 最近一次回复的行为事件（供 WS 层随 reply 一起广播；无副作用仅缓存）
         self._last_behavior: Optional[Dict] = None
+        # M2 多步任务规划器（纯函数、确定性，可注入替身便于测试/关闭）
+        self.task_planner = None  # 惰性：首次使用时确定为 TaskPlanner（可用 False 关闭）
+        # 最近一次图运行的 task_status / plan（供 WS/test 读取任务收敛结果；无副作用）
+        self.last_task_status: Optional[Dict] = None
+        self.last_task_plan: Optional[Dict] = None
 
         self.system_prompt = system_prompt or role_manager.load_prompt(role_id)
         # 默认用 LLMManager 按当前 provider 构建（本地 Ollama / 远程兼容均可），
@@ -116,6 +122,7 @@ class LangGraphMemoryAgent:
 
         workflow.add_node("agent", self._agent_node)
         workflow.add_node("tools", ToolNode(self._tool_registry_fns()))
+        workflow.add_node("observe", self._observe_node)
 
         workflow.set_entry_point("agent")
 
@@ -124,7 +131,9 @@ class LangGraphMemoryAgent:
             self._route_after_agent,
             {"tools": "tools", "end": END},
         )
-        workflow.add_edge("tools", "agent")
+        # act: 工具执行后先经 observe 汇总观察，再回 agent 决定下一步
+        workflow.add_edge("tools", "observe")
+        workflow.add_edge("observe", "agent")
 
         return workflow.compile()
 
@@ -151,6 +160,20 @@ class LangGraphMemoryAgent:
                 first_user_msg = m.content or ""
                 break
         user_msg = first_user_msg
+
+        # ========== M2 任务循环：plan 阶段（只在第一轮，无 plan 时规划） ==========
+        # 用确定性纯函数 TaskPlanner 判断「简单一句消费」vs「需要多步任务」。
+        # 若为多步任务，生成骨架 plan 存入 state；后续 agent 轮根据 plan + observe
+        # 维护的 task_status 决定执行哪个子步。简单单轮则 plan 保持 None，行为不回归。
+        plan = state.get("plan")
+        if plan is None and self.task_planner is not False:
+            planner = self.task_planner or TaskPlanner
+            try:
+                p = planner.plan(user_msg)
+                plan = p.to_dict() if p else None
+            except Exception:
+                plan = None
+        task_status = state.get("task_status") or {}
 
         # 感知：记录一次用户活跃（时序/作息模型）
         perception = getattr(self, "perception", None)
@@ -195,6 +218,9 @@ class LangGraphMemoryAgent:
         base_prompt = self._build_system_prompt(
             session, retrieval, user_id, role_id, state.get("room_context")
         )
+        # M2：任务上下文注入（若有 plan）——让 LLM 知道当前是多步任务及进度
+        if plan:
+            base_prompt = base_prompt + self._build_task_prompt(plan, task_status)
 
         # ========== 构建 LLM 消息 ==========
         # 第一部分：L1 历史（该 user 的完整会话，不含本次；L1 已在 add_to_l1 中按
@@ -236,7 +262,8 @@ class LangGraphMemoryAgent:
 
         if tool_calls_raw:
             msg = AIMessage(content=content, tool_calls=self._to_lc_tool_calls(tool_calls_raw))
-            return {"messages": [msg], "iteration": state.get("iteration", 0) + 1}
+            return {"messages": [msg], "iteration": state.get("iteration", 0) + 1,
+                    "plan": plan, "task_status": task_status}
 
         # ---- 兜底守卫：模型"说要查却不查"时的可靠性补位 ----
         # 自治路由把工具决定权交给 LLM，但本地模型偶发会只用口述承诺（如"让我帮你查一下天气"）
@@ -258,12 +285,18 @@ class LangGraphMemoryAgent:
                 content=content or "",
                 tool_calls=forced,
             )
-            return {"messages": [msg], "iteration": state.get("iteration", 0) + 1}
+            return {"messages": [msg], "iteration": state.get("iteration", 0) + 1,
+                    "plan": plan, "task_status": task_status}
 
-        # 无工具：最终回复
+        # 无工具：最终回复（任务循环的完成确认 / 单轮的直接回复）
         final_msg = AIMessage(content=content)
         self._after_reply(user_id, session, user_msg, content)
-        return {"messages": [final_msg], "iteration": state.get("iteration", 0) + 1}
+        # 多步任务在此结束：把已完成状态写回（供外部/测试读取收敛结果）
+        if plan:
+            task_status["done"] = True
+            task_status["conclusion"] = content
+        return {"messages": [final_msg], "iteration": state.get("iteration", 0) + 1,
+                "plan": plan, "task_status": task_status}
 
     @staticmethod
     def _needs_realtime(user_msg: str) -> bool:
@@ -302,6 +335,53 @@ class LangGraphMemoryAgent:
         if isinstance(last, AIMessage) and last.tool_calls:
             return "tools"
         return "end"
+
+    # ===================== M2 任务循环：observe / 提示注入 =====================
+
+    def _observe_node(self, state: AgentState) -> dict:
+        """observe 节点：工具执行后，汇总本轮工具结果到 task_status.observations。
+
+        有 plan（多步任务）时才记录；单轮无 plan 时保持 task_status 为空，不产生副作用。
+        只做累积记录，不改变执行路径（tools -> observe -> agent）。
+        """
+        task_status = dict(state.get("task_status") or {})
+        obs = list(task_status.get("observations") or [])
+        plan = state.get("plan")
+        # 取最近一条 ToolMessage 作为本轮观察
+        for m in reversed(state.get("messages") or []):
+            if isinstance(m, ToolMessage):
+                obs.append({
+                    "tool_call_id": getattr(m, "tool_call_id", ""),
+                    "result": (m.content or "")[:400],
+                })
+                break
+        task_status["observations"] = obs
+        # 若有 plan，标记当前进行中的子步/进度（供提示注入）
+        if plan:
+            task_status.setdefault("progress", {"done": 0, "total": len(plan.get("steps") or [])})
+        return {"task_status": task_status}
+
+    def _build_task_prompt(self, plan: Dict, task_status: Dict) -> str:
+        """把多步任务骨架 + 当前进度注入 system prompt，指导 LLM 按步骤完成并确认。"""
+        steps = plan.get("steps") or []
+        lines = ["", "【当前多步任务】你要帮用户完成一个多步任务，请按顺序想清楚再逐步行动："]
+        lines.append(f"- 任务目标：{plan.get('goal') or ''}")
+        for s in steps:
+            mark = "☐"
+            if s.get("status") == "done":
+                mark = "☑"
+            hint = f"（可用工具：{s['tool_hint']}）" if s.get("tool_hint") else ""
+            lines.append(f"  {mark} 第{s.get('index', 0) + 1}步：{s.get('description')}{hint}")
+        obs = (task_status.get("observations") or [])
+        if obs:
+            lines.append("【已执行的中间结果】")
+            for o in obs[-5:]:
+                lines.append(f"- {str(o.get('result') or '')[:120]}")
+        lines.append(
+            "【要求】先做必要的工具调用去完成每个子步；全部完成后，给用户一句自然的总结确认，"
+            "不要只做第一步就停。若某一步无法完成，如实说明。"
+        )
+        return "\n".join(lines)
 
     @staticmethod
     def _to_ollama_tool_calls(lc_tool_calls, openai_style: bool = False) -> List[dict]:
@@ -469,6 +549,9 @@ class LangGraphMemoryAgent:
         }
         try:
             result = self.graph.invoke(initial)
+            # 记录任务循环的最终 plan/task_status（供 WS/测试读取）
+            self.last_task_plan = result.get("plan")
+            self.last_task_status = result.get("task_status")
             msgs = result.get("messages", [])
             text = ""
             for m in reversed(msgs):
