@@ -325,6 +325,7 @@
     // 用户说话 → 角色轻声"倾听"反应（点头，增强生命感）
     onUserSay();
     bus.emit("send", { content: text });
+    bus.emit("activity");   // 记录一次用户交互（重置待机倒计时）
   }
 
   // ============================================================
@@ -671,12 +672,12 @@
   // mouth: 该情绪下说话的口型开合基准（0~1，越大嘴张越开）；
   // speed: 该情绪下嘴动频率系数（开心/激动更快更"雀跃"，平静更缓）。
   var EMOTION_RULES = [
-    { keys: ["哈哈", "hhhh", "笑死", "太好笑", "233", "嘻嘻", "嘿嘿", "开心", "好高兴", "喜欢", "爱你", "好棒"], motion: ["smile01", "smile02", "laugh"], expr: "smile01", mouth: 0.68, speed: 1.25 },
-    { keys: ["难过", "伤心", "哭", "呜呜", "难受", "委屈", "想哭", "好难过", "唉"], motion: ["cry01", "cry02", "sad01"], expr: "cry01", mouth: 0.35, speed: 0.85 },
-    { keys: ["生气", "气死", "愤怒", "讨厌", "烦", "滚", "走开", "哼"], motion: ["angry01"], expr: "angry01", mouth: 0.55, speed: 1.2 },
-    { keys: ["真的吗", "不会吧", "哇", "诶", "惊讶", "没想到", "吓", "什么?"], motion: ["surprised01", "surprised02"], expr: "surprised01", mouth: 0.8, speed: 1.4 },
-    { keys: ["害羞", "不好意思", "脸红", "难为情", "羞", "讨厌啦"], motion: ["shame01"], expr: "shame01", mouth: 0.3, speed: 0.75 },
-    { keys: ["", "嗯", "对", "好的", "是的", "明白", "知道了", "晚安", "再见", "拜拜"], motion: ["nod01", "nod02", "bye01"], expr: "default", mouth: 0.5, speed: 1.0 },
+    { keys: ["哈哈", "hhhh", "笑死", "太好笑", "233", "嘻嘻", "嘿嘿", "开心", "好高兴", "喜欢", "爱你", "好棒"], motion: ["smile01", "smile02", "laugh"], expr: "smile01", act: "laugh", mouth: 0.68, speed: 1.25 },
+    { keys: ["难过", "伤心", "哭", "呜呜", "难受", "委屈", "想哭", "好难过", "唉"], motion: ["cry01", "cry02", "sad01"], expr: "cry01", act: "cry", mouth: 0.35, speed: 0.85 },
+    { keys: ["生气", "气死", "愤怒", "讨厌", "烦", "滚", "走开", "哼"], motion: ["angry01"], expr: "angry01", act: "angry", mouth: 0.55, speed: 1.2 },
+    { keys: ["真的吗", "不会吧", "哇", "诶", "惊讶", "没想到", "吓", "什么?"], motion: ["surprised01", "surprised02"], expr: "surprised01", act: "surprised", mouth: 0.8, speed: 1.4 },
+    { keys: ["害羞", "不好意思", "脸红", "难为情", "羞", "讨厌啦"], motion: ["shame01"], expr: "shame01", act: "shame", mouth: 0.3, speed: 0.75 },
+    { keys: ["", "嗯", "对", "好的", "是的", "明白", "知道了", "晚安", "再见", "拜拜"], motion: ["nod01", "nod02", "bye01"], expr: "default", act: "nod", mouth: 0.5, speed: 1.0 },
   ];
 
   // 情绪主名 → 口型基准/频率（供 behavior.emotion.primary 联动，行为事件无 mouth_open 时用）
@@ -694,6 +695,156 @@
     "害羞": { mouth: 0.28, speed: 0.7 },
     "困":   { mouth: 0.25, speed: 0.6 },
   };
+
+  // 情绪主名 → 表情名（供 behavior.emotion.primary 无 expression 时映射表情，跨角色别名兜底）
+  // 与窗口A BehaviorMapper 的 _EMOTION_EXPRESSION 语义对齐。
+  var EMOTION_RULES_EXPR = {
+    "开心": "smile01", "高兴": "smile01", "愉悦": "smile02", "满足": "smile02",
+    "兴奋": "f01", "生气": "angry01", "愤怒": "angry01",
+    "难过": "sad01", "伤心": "sad01", "沮丧": "serious01",
+    "焦虑": "surprised01", "担心": "serious02", "惊讶": "surprised01",
+    "害羞": "shame01", "撒娇": "f02", "感动": "smile03",
+    "平静": "default", "平和": "default", "疲惫": "default", "困": "default",
+  };
+
+  // ============================================================
+  // 行为驱动：语义动作名 → 真实 mtn 组（跨模型解析 / 回退）
+  // 窗口A behavior.actions（如 wave/clap/bow/nod/shrug）是**语义名**，
+  // 与各模型实际 mtn 组名（nod01/bye01/oowarai01…）不同；且不同角色命名
+  // 不同（Kasumi: nod/bye；Kokoro 无 nod01）。这里按候选链逐模型解析，
+  // 命中该模型实际存在的组才播放；全不命中则静默跳过（不报错）。
+  // ============================================================
+  // 语义动作 -> 候选 mtn 组（按优先级；各候选需在 motionGroups() 中存在才算命中）
+  var ACTION_MOTION_MAP = {
+    "nod":    ["nod01", "nod02", "smile01"],      // 点头（Kokoro 无 nod → 微笑）
+    "wave":   ["bye01", "wink01", "smile02"],     // 挥手/再见（Kasumi/Kokoro 均无须 fallback）
+    "clap":   ["oowarai01", "kime01", "smile03"], // 鼓掌/欢呼（Kokoro 无 oowarai → kime）
+    "bow":    ["jaan01", "kime01", "shame01"],    // 鞠躬/致意（有礼动作）
+    "shrug":  ["nf01", "nnf01", "eeto01", "serious01"], // 耸肩/无奈（Kokoro 无 nnf/eeto → nf）
+    "wink":   ["wink01", "smile02"],
+    "sleep":  ["sleep01", "sleep02", "shame01"],
+    "cry":    ["cry01", "cry02", "cry03", "sad01"],
+    "laugh":  ["oowarai01", "smile02", "smile01"],
+    "smile":  ["smile01", "smile02", "smile03"],
+    "idle":   ["idle01", "idle02", "smile01"],
+  };
+  // 解析：给定语义动作名，返回该模型下第一个存在的 mtn 组；无则 null
+  function resolveMotion(semantic, groups) {
+    var cands = ACTION_MOTION_MAP[semantic];
+    if (!cands) return null;
+    for (var i = 0; i < cands.length; i++) {
+      if (groups.indexOf(cands[i]) >= 0) return cands[i];
+    }
+    return null;
+  }
+  // 播放一个语义动作：找到真实 mtn 组并 playMotion
+  function playAction(semantic, priority) {
+    var g = resolveMotion(semantic, motionGroups());
+    if (g) { renderer.playMotion(g, 0, priority == null ? 3 : priority); return true; }
+    return false;
+  }
+
+  // ---- 表达式解析与跨角色兜底 ----
+  // 运行时按当前模型 exp 名称解析；未命中直接名时，用别名链回退到
+  // 该模型存在的近似 exp（Kasumi 的 smile01 在 Kokoro 里是 kokoro_smile01 等）。
+  // 上述契约 §3.2：behavior.expression 是 exp.json 名，这里确保"已产出的都能命中"。
+  function expressionNames() {
+    try {
+      var m = window.__l2dManager && window.__l2dManager.getModel && window.__l2dManager.getModel(0);
+      var ex = m && m.modelSetting && m.modelSetting.json && m.modelSetting.json.expressions;
+      if (Array.isArray(ex)) {
+        var names = [];
+        ex.forEach(function (e) { if (e && e.name) names.push(e.name); });
+        return names;
+      }
+    } catch (e) {}
+    return [];
+  }
+  // 语义/别名 -> 在该模型下优先命中的 exp 名（别名链）
+  var EXPR_ALIAS = {
+    "smile":      ["smile01", "kokoro_smile01", "smile02", "smile03"],
+    "happy":      ["smile01", "kokoro_smile01", "smile02", "f01"],
+    "sad":        ["sad01", "kokoro_sad", "sad02", "cry01"],
+    "angry":      ["angry01", "kokoro_serious", "serious01"],
+    "surprised":  ["surprised01", "kokoro_suprised", "f01"],
+    "shame":      ["shame01", "kokoro_smile02", "smile02"],
+    "default":    ["default", "kokoro_default", "idle01"],
+    "neutral":    ["default", "kokoro_default"],
+    "serious":    ["serious01", "kokoro_serious", "serious02"],
+    "cry":        ["cry01", "kokoro_sad", "cry03", "sad01"],
+    "excited":    ["f01", "kokoro_special", "smile01"],
+    "sleep":      ["default", "kokoro_default", "idle01"],
+    "smile01": ["smile01", "kokoro_smile01", "smile02"],
+    "smile02": ["smile02", "kokoro_smile02", "smile01", "smile03"],
+    "smile03": ["smile03", "kokoro_smile02", "smile02"],
+    "sad01":   ["sad01", "kokoro_sad", "sad02"],
+    "angry01": ["angry01", "kokoro_serious", "serious01"],
+    "surprised01": ["surprised01", "kokoro_suprised", "f01"],
+    "shame01": ["shame01", "kokoro_smile02", "smile02"],
+    "serious01": ["serious01", "kokoro_serious", "serious02"],
+    "serious02": ["serious02", "kokoro_serious", "serious01"],
+    "cry01":   ["cry01", "kokoro_sad", "cry03", "sad01"],
+    "default": ["default", "kokoro_default", "idle01"],
+    "f01":     ["f01", "kokoro_special", "smile01"],
+    "f02":     ["f02", "kokoro_special", "smile01"],
+    "f03":     ["f03", "kokoro_special", "smile01"],
+    "f04":     ["f04", "kokoro_special", "smile01"],
+    "f05":     ["f05", "kokoro_special", "smile01"],
+    "f06":     ["f06", "kokoro_special", "smile01"],
+    "f07":     ["f07", "kokoro_special", "smile01"],
+    "f08":     ["f08", "kokoro_special", "smile01"],
+    "f09":     ["f09", "kokoro_special", "smile01"],
+    "f10":     ["f10", "kokoro_special", "smile01"],
+    "f11":     ["f11", "kokoro_special", "smile01"],
+    "f12":     ["f12", "kokoro_special", "smile01"],
+    "f13":     ["f13", "kokoro_special", "smile01"],
+    "f14":     ["f14", "kokoro_special", "smile01"],
+    "f15":     ["f15", "kokoro_special", "smile01"],
+    "f16":     ["f16", "kokoro_special", "smile01"],
+    "f17":     ["f17", "kokoro_special", "smile01"],
+    "f18":     ["f18", "kokoro_special", "smile01"],
+    "kime01":  ["kime01", "kokoro_serious", "kokoro_smile01", "serious01"],
+    "idle01":  ["idle01", "kokoro_default", "default"],
+  };
+  var _modelExprNames = null;   // 当前模型 exp 名缓存（模型切换后失效）
+  var lastExpression = "";       // 最近一次成功设置的表情（待机/回退恢复用）
+  // 安全设置表达式：直接名命中用直接名；否则别名链回退到模型实际存在者；
+  // 记录 lastExpression 供待机/回退恢复。未命中任何候选则不动。
+  function setExpressionSafe(name) {
+    if (!name) return false;
+    var names = expressionNames();
+    if (names.indexOf(name) >= 0) {
+      renderer.setExpression(name);
+      lastExpression = name;
+      return true;
+    }
+    var chain = EXPR_ALIAS[name];
+    if (chain) {
+      for (var i = 0; i < chain.length; i++) {
+        if (names.indexOf(chain[i]) >= 0) {
+          renderer.setExpression(chain[i]);
+          lastExpression = chain[i];
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // ---- 表情临时态：设一段时间后恢复进入前表情（待机/微交互用）----
+  var _exprRestoreTimer = 0;
+  function setExpressionTimed(name, ms) {
+    var prev = lastExpression;              // 记录进入前的表情
+    var ok = setExpressionSafe(name);
+    if (!ok) return false;
+    if (_exprRestoreTimer) { clearTimeout(_exprRestoreTimer); _exprRestoreTimer = 0; }
+    // ms 后恢复进入前的表情（若期间没有新的 setExpressionSafe 覆盖）
+    _exprRestoreTimer = setTimeout(function () {
+      _exprRestoreTimer = 0;
+      if (prev && lastExpression === name) setExpressionSafe(prev);   // 仅当仍是临时态才回正
+    }, ms || 1800);
+    return true;
+  }
 
   function detectEmotion(text) {
     text = (text || "").toLowerCase();
@@ -713,11 +864,14 @@
       var idx = detectEmotion(text);
       var rule = EMOTION_RULES[idx];
       if (rule) {
-        renderer.setExpression(rule.expr || "default");
-        // 情感动作（若 group 存在）
-        var g = rule.motion && rule.motion[0];
-        if (g && renderer.motionGroups().indexOf(g) >= 0) {
-          renderer.playMotion(g, 0, 3);
+        // 表情用安全解析（跨角色/别名兜底）
+        setExpressionSafe(rule.expr || "default");
+        // 情感动作（语义 → 真实 mtn 组），若命中才播
+        var sem = rule.act;   // 对应该情绪语义动作（在 EMOTION_RULES 里定义）
+        if (sem) playAction(sem, 3);
+        else {
+          var g = rule.motion && rule.motion[0];
+          if (g && motionGroups().indexOf(g) >= 0) renderer.playMotion(g, 0, 3);
         }
         return { idx: idx, mouth: rule.mouth != null ? rule.mouth : 0.55,
                  speed: rule.speed != null ? rule.speed : 1.0 };
@@ -773,34 +927,31 @@
   function applyBehavior(behavior, text) {
     var used = false;
     var b = behavior || {};
-    var groups = renderer.motionGroups();
+    var groups = motionGroups();
     var bEmotion = (b.emotion && b.emotion.primary) || "";
 
-    // 1) 表情：behavior.expression 是 exp.json 名，优先直接用
+    // 1) 表情：behavior.expression 是 exp.json 名（或语义名），用安全解析（跨模型/别名兜底）
     if (b.expression) {
-      renderer.setExpression(b.expression);
-      used = true;
+      if (setExpressionSafe(b.expression)) used = true;
     } else if (bEmotion) {
-      // 无显式 expression，但有情绪名 → 尝试映射到已知表情（友好降级）
-      var emoRule = EMOTION_MOUTH_MAP[bEmotion];
-      if (!emoRule) {
-        // 从 EMOTION_RULES 里找 expr
+      // 无显式 expression，但有情绪名 → 按情绪主名映射到表情（friendly 降级），再安全设置
+      var emoExpr = EMOTION_RULES_EXPR[bEmotion];
+      if (emoExpr) { if (setExpressionSafe(emoExpr)) used = true; }
+      else {
+        // 从 EMOTION_RULES 的 keys 反查 expr
         for (var k in EMOTION_RULES) {
           if (EMOTION_RULES[k].keys.indexOf(bEmotion) >= 0) {
-            renderer.setExpression(EMOTION_RULES[k].expr || "default");
+            if (setExpressionSafe(EMOTION_RULES[k].expr || "default")) used = true;
             break;
           }
         }
       }
     }
 
-    // 2) 动作：behavior.actions 数组，逐个播放存在的 mtn（存在即播，吸收未知名）
+    // 2) 动作：behavior.actions 是**语义名**（wave/clap/bow/nod/shrug）→ 解析到真实 mtn 组
     if (Array.isArray(b.actions) && b.actions.length) {
       b.actions.forEach(function (act) {
-        if (act && groups.indexOf(act) >= 0) {
-          renderer.playMotion(act, 0, 3);
-          used = true;
-        }
+        if (act && playAction(act, 3)) used = true;
       });
     }
 
@@ -819,6 +970,7 @@
 
   function onRoleTalk(text, behavior) {
     var b = behavior || null;
+    bus.emit("activity");   // 收到角色开口 → 重置待机倒计时（说话时不动）
     // 若有 behavior 且包含可驱动信息 → 优先消费；否则回退"前端猜"
     var hasBehavior = b && (
       b.expression ||
@@ -835,10 +987,78 @@
     lipSpeak(text, undefined, emo.mouth, emo.speed);
   }
 
-  // 用户输入时角色轻微"倾听/感兴趣"反应（增强生命感，不改对话行为）
+  // 用户输入时角色"倾听/感兴趣"反应（增强生命感，不改对话行为）
+  // 用 playAction(语义"nod")以跨模型命中；Kokoro 无 nod01 时自动回退微笑。
   function onUserSay() {
-    var g = "nod01";
-    if (renderer.motionGroups().indexOf(g) >= 0) renderer.playMotion(g, 0, 2);
+    playAction("nod", 2);
+  }
+
+  // ============================================================
+  // 点击 / 交互反馈（增强生命感）
+  // 点宠物身体 → 随机友好反应（眨眼/微笑/惊讶/张望），带防抖避免连点刷屏。
+  // petmode 下窗口整窗移动由 pywebview easy_drag 负责；点击事件仍可正常到达
+  // （easy_drag 仅在用户拖动时拦截），故此处不加"拖动则忽略"逻辑，只做点击防抖。
+  // ============================================================
+  var tapT = { last: 0 };
+  var TAP_REACTIONS = ["wink", "smile", "smile", "nod", "surprised", "wink"];
+  function onPetTap() {
+    var now = Date.now();
+    if (now - tapT.last < 2500) return;   // 防抖：每 2.5s 至多一次
+    tapT.last = now;
+    // 随机挑一个轻反应（语义动作），并偶尔换一下表情
+    var pick = TAP_REACTIONS[Math.floor(Math.random() * TAP_REACTIONS.length)];
+    playAction(pick, 4);                 // 高优先级（点它就是想让它有反应）
+    if (pick === "surprised") setExpressionTimed("surprised", 1200);
+    else if (pick === "wink") setExpressionTimed("smile", 900);
+    bus.emit("tap", { reaction: pick });
+    bus.emit("activity");   // 点击也算交互，重置待机倒计时
+  }
+
+  // ============================================================
+  // 待机表现（长时间无交互/无对话 → 宠物自然"活着"）
+  // - 每 IDLE_LOOP_MS 随机播放一个轻待机动作（低优先级，不打断主动行为）
+  // - 附带随机表情微变（如困→眨眼→回归），由 idleTick 驱动并回正 lastExpression
+  // - 一旦用户交互/收到消息，立即重置"无交互计时"（避免说话时乱动）
+  // - 通过 bus.on("activity") 由 sendText/onRoleTalk/onPetTap 触发 reset
+  // ============================================================
+  var IDLE_LOOP_MS = 9000;        // 待机动作间隔（无交互时）
+  var IDLE_IDLE_MS = 3500;        // 距上次交互多久后进入待机循环
+  var IDLE_ACTIONS = ["nod", "wink", "smile", "surprised", "shrug", "nod", "wink", "idle"];
+  var idleT = {
+    timer: 0,
+    lastActivity: 0,
+    started: false,
+    idx: 0,
+  };
+  function idleReset() {
+    idleT.lastActivity = Date.now();
+    idleT.started = false;         // 重新进入待机倒计时
+  }
+  function startIdle() {
+    if (idleT.timer || !renderer.available()) return;
+    // 观察所有"活动"信号并重置待机倒计时
+    bus.on("activity", idleReset);
+    idleReset();
+    idleT.timer = setInterval(function () {
+      // 距上次交互不足 IDLE_IDLE_MS → 保持安静（进入期）
+      if (Date.now() - idleT.lastActivity < IDLE_IDLE_MS) { idleT.started = true; return; }
+      // 说话中不动（lipT.active 表示正在开口）
+      if (lipT.active) return;
+      // 随机待机动作（低优先级 2，不打断 3/4 的主动行为）
+      var act = IDLE_ACTIONS[idleT.idx % IDLE_ACTIONS.length];
+      idleT.idx++;
+      // 偶发表情微变 + 恢复（借助 respire 的表情微调）
+      var nowExprT = setIdleMood();
+      playAction(act, 2);
+      bus.emit("idle", { action: act });
+    }, IDLE_LOOP_MS);
+  }
+  // 待机时的表情微变（偶尔困/眨眼，之后回正）
+  function setIdleMood() {
+    var r = Math.random();
+    if (r < 0.28) return setExpressionTimed("sleep", 2500);    // 偶尔打个哈欠/犯困表情
+    if (r < 0.5) return setExpressionTimed("smile", 1800);     // 偶尔微笑
+    return null;                                               // 保持当前
   }
 
   // ============================================================
@@ -862,6 +1082,19 @@
     });
     el.bubbleText.addEventListener("click", function (e) { e.stopPropagation(); });
     el.retry.addEventListener("click", function () { hideError(); loadModel(state.currentModel); });
+
+    // 点击宠物身体 → 交互反馈（委托到 document，canvas 是 L2Dwidget 动态创建的）
+    // 排除点击到 UI 控件（输入条/气泡/面板/按钮）的情况，避免误触
+    document.addEventListener("click", function (e) {
+      var t = e.target;
+      var isCanvas = t && (t.tagName === "CANVAS" ||
+                           (t.id === "live2d-widget") ||
+                           (t.id === "live2d-canvas"));
+      if (!isCanvas) return;
+      var onUI = t.closest && t.closest("#l2d-inputbar, #l2d-bubble, #l2d-model-panel, .l2d-topbar, #l2d-toggle-panel");
+      if (onUI) return;   // 点到 UI 不算摸宠物
+      onPetTap();
+    });
   }
 
   // ============================================================
@@ -928,6 +1161,8 @@
         // 页内拖动仅大窗模式启用——见 initCanvasDrag 内的 petmode 判断）
         initCanvasDrag();
         initEyeTrack();
+        // 待机表现：长时间无交互时宠物自然"活着"（动作 + 表情微变）
+        startIdle();
         // 注意：窗口自动裁剪到角色(cropToChar)已停用——角色显示大小随窗口缩放，
         // 裁剪窗口无法让角色铺满（见 schedulePetCrop 注释）。改为调大模型 scale 填满。
       }
@@ -1041,8 +1276,20 @@
   window.Live2D.emotion = function (t) { EMO.fromText(t); };
   window.Live2D.speak = function (t) { lipSpeak(t); };
   window.Live2D.stopSpeak = lipStop;
-  window.Live2D.motions = function () { return renderer.motionGroups(); };
+  window.Live2D.motions = function () { return motionGroups(); };
   window.Live2D._setCursor = setCursor;
+  // M2/M3 表现层后门：动作/表情/点击/待机（供外部脚本或测试驱动）
+  window.Live2D.playAction = playAction;
+  window.Live2D.resolveMotion = resolveMotion;
+  window.Live2D.setExpressionSafe = setExpressionSafe;
+  window.Live2D.setExpressionTimed = setExpressionTimed;
+  window.Live2D.onPetTap = onPetTap;
+  window.Live2D.expressionNames = expressionNames;
+  window.Live2D.idle = { start: startIdle, reset: idleReset };
+  window.Live2D.lastExpression = function () { return lastExpression; };
+  window.Live2D.applyBehavior = applyBehavior;
+  window.Live2D.onRoleTalk = onRoleTalk;
+  window.Live2D.emoFromText = function (t) { return EMO.fromText(t); };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
