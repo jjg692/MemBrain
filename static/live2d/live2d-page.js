@@ -300,12 +300,13 @@
       else if (msg.type === "reply") {
         setPending(false);
         showBubble(msg.content || "");
-        // 对话联动：角色回复 → 情感表情/动作 + 口型
-        onRoleTalk(msg.content || "");
-        bus.emit("message", { role_id: msg.role_id, content: msg.content });
+        // 对话联动：优先取窗口A下发的 behavior（表情/口型/动作），
+        // 没有则回退到"前端猜"（+0 契约 §3.2：向后兼容，对方未完成时不坏）
+        onRoleTalk(msg.content || "", msg.behavior);
+        bus.emit("message", { role_id: msg.role_id, content: msg.content, behavior: msg.behavior });
       } else if (msg.type === "proactive" || msg.type === "reminder") {
         showBubble(msg.content || msg.text || "");
-        onRoleTalk(msg.content || msg.text || "");
+        onRoleTalk(msg.content || msg.text || "", msg.behavior);
         bus.emit("push", msg);
       }
     };
@@ -712,6 +713,7 @@
     startTime: 0,
     dur: 0,
     speed: 1,
+    baseOpen: 0.55,  // 说话时 mouth 开合基准（behavior 可覆盖）
   };
   function lipStop() {
     lipT.active = false;
@@ -723,32 +725,73 @@
     if (!lipT.active) return;
     var p = (now - lipT.startTime) / lipT.durEff();
     if (p > 1) { lipStop(); return; }
-    // 用多个频率叠加出自然的"说话"开合，并在句读处闭嘴
-    var open = 0.35 + 0.5 * Math.abs(Math.sin(now / 90 * lipT.speed));
-    var punct = lipT.restPts || [];
-    // 简化：不精确句读，只做平滑嘴动
-    renderer.setMouth(Math.max(0.1, Math.min(1, open)));
+    // 以 baseOpen 为中心叠加正弦开合；behavior 给的 mouth_open 越高，嘴越张开
+    var open = lipT.baseOpen + 0.25 * Math.abs(Math.sin(now / 90 * lipT.speed));
+    renderer.setMouth(Math.max(0.05, Math.min(1, open)));
     lipT.raf = requestAnimationFrame(lipTick);
   }
-  function lipSpeak(text, durMs) {
+  function lipSpeak(text, durMs, baseOpen) {
     var len = (text || "").length;
     if (!len) { lipStop(); return; }
     lipT.active = true;
     lipT.startTime = performance.now();
-    // 设一个"有效时长"让 mouth 周期匹配语速：字数越多单字越短
+    // behavior 提供的口型基准优先；否则用默认
+    if (typeof baseOpen === "number") lipT.baseOpen = Math.max(0.25, Math.min(0.9, baseOpen));
+    else lipT.baseOpen = 0.55;
     lipT.speed = Math.max(1.5, Math.min(3, len / 12));
     lipT.dur = durMs || Math.max(1500, Math.min(15000, len * 220));
-    // 有效时长（实际开到 close 之间的间隔）
     lipT.durEff = function () { return lipT.dur; };
     renderer.setLipSync(true);
     if (!lipT.raf) { lipT.raf = requestAnimationFrame(lipTick); }
   }
 
-  // 角色开口说话：情感 + 口型联动
-  function onRoleTalk(text) {
-    // 先做情感表情 + 简短动作
+  // 角色开口说话：优先窗口A下发的 behavior（表情/口型/动作），否则前端猜（+0 契约 §3.2）
+  // behavior: { emotion?, expression?, mouth_open?, actions?[] }
+  function applyBehavior(behavior, text) {
+    var used = false;
+    var b = behavior || {};
+    var groups = renderer.motionGroups();
+
+    // 1) 表情：behavior.expression 是 exp.json 名，优先直接用
+    if (b.expression) {
+      renderer.setExpression(b.expression);
+      used = true;
+    }
+
+    // 2) 动作：behavior.actions 数组，逐个播放存在的 mtn（存在即播，吸收未知名）
+    if (Array.isArray(b.actions) && b.actions.length) {
+      b.actions.forEach(function (act) {
+        if (act && groups.indexOf(act) >= 0) {
+          renderer.playMotion(act, 0, 3);
+          used = true;
+        }
+      });
+    }
+
+    // 3) 口型：behavior.mouth_open 作为说话开合基准（0~1）
+    var baseOpen = (typeof b.mouth_open === "number") ? b.mouth_open : null;
+    if (baseOpen !== null) {
+      used = true;
+    }
+    lipSpeak(text, undefined, baseOpen);
+
+    return used;
+  }
+
+  function onRoleTalk(text, behavior) {
+    var b = behavior || null;
+    // 若有 behavior 且包含可驱动信息 → 优先消费；否则回退"前端猜"
+    var hasBehavior = b && (
+      b.expression ||
+      (Array.isArray(b.actions) && b.actions.length) ||
+      typeof b.mouth_open === "number"
+    );
+    if (hasBehavior) {
+      applyBehavior(b, text);
+      return;
+    }
+    // —— 回退：现有"前端猜"（关键词情感 → 表情动作；估口型）——
     EMO.fromText(text);
-    // 再做口型（说话过程张嘴）
     lipSpeak(text);
   }
 
