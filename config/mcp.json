@@ -1,0 +1,4 @@
+{
+  "_comment": "MCP 客户端配置。每个 server: {command: 启动命令, args: [...], env?: {...}}。暴露的工具会自动注册到 LLM。",
+  "servers": []
+}

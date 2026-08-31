@@ -422,6 +422,25 @@ TOOL_REGISTRY = {
 if _ASSISTANT_AVAILABLE:
     TOOL_REGISTRY.update(ASSISTANT_TOOL_REGISTRY)
 
+# MCP 客户端骨架：动态发现并注册外部工具（游戏 MCP 等）。
+# 无 MCP 配置或 server 启动失败时静默降级，不影响既有功能。
+try:
+    from core.mcp_client import get_mcp_manager, McpError
+    _mcp = get_mcp_manager()
+    _mcp.load()
+    if _mcp.servers:
+        ALL_TOOLS.extend(_mcp.schemas())
+        for tname in _mcp.tool_names():
+            def _mk(tname):
+                def _call(arguments=None, **kw):
+                    return _mcp.call(tname, arguments or kw)
+                return _call
+            TOOL_REGISTRY[tname] = _mk(tname)
+except Exception as e:
+    from core.logger import log_error
+    log_error("MCP", f"MCP 注册失败（跳过）: {e}")
+    _mcp = None
+
 
 def execute_tool(name: str, arguments: dict) -> str:
     """根据工具名执行并返回结果字符串"""
