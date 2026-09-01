@@ -182,8 +182,15 @@ def build_windows():
             @Slot(int, int)
             def dragBy(self, dx, dy):
                 # 页面手势识别出"拖动"后，按位移增量移动窗口（HTCLIENT 下由页面驱动拖动）
+                # 加边界：至少留一小部分窗口在可见屏幕内，避免整窗拖出屏幕外找不到。
                 try:
-                    self.win.move(self.win.x() + int(dx), self.win.y() + int(dy))
+                    g = self.win.geometry()
+                    sw, sh = _screen_size()
+                    # 允许窗口中心可超出范围，但至少保留约 1/4 窗口在屏内，防止完全拖丢
+                    min_keep = 60
+                    nx = max(-(g.width() - min_keep), min(sw - min_keep, g.x() + int(dx)))
+                    ny = max(-(g.height() - min_keep), min(sh - min_keep, g.y() + int(dy)))
+                    self.win.move(nx, ny)
                 except Exception:
                     pass
             @Slot(float, float)
