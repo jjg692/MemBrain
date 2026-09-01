@@ -137,14 +137,19 @@ def build_windows():
         WM_NCHITTEST = HTCLIENT = HTCAPTION = 0
 
     class DraggableWindow(QWidget):
-        """透明悬浮窗：整窗按 HTCAPTION 处理，按住任意位置可拖动（Windows 原生拖拽）。"""
+        """透明悬浮窗：鼠标事件正常进 WebView（HTCLIENT）。
+        窗口拖动改由页面手势识别后经 petHost.dragBy 驱动（见 attach_pethost），
+        这样点击能触发页面交互、悬停能显示手型，而不是被 HTCAPTION 整窗吞掉。
+        """
         def nativeEvent(self, eventType, message):
             try:
                 if eventType in (b"windows_generic_MSG", "windows_generic_MSG"):
                     from ctypes import wintypes
                     msg = wintypes.MSG.from_address(int(message))
                     if msg.message == WM_NCHITTEST:
-                        return (True, HTCAPTION)
+                        # 返回 HTCLIENT：让所有鼠标事件进入页面（点击/悬停/手型正常）。
+                        # 拖动由页面手势识别 + petHost.dragBy 完成。
+                        return (True, HTCLIENT)
             except Exception:
                 pass
             return super().nativeEvent(eventType, message)
@@ -174,6 +179,13 @@ def build_windows():
             def setCursor(self, dx, dy):
                 # 页面已能收到鼠标时由页面自己驱动；此槽为兜底
                 pass
+            @Slot(int, int)
+            def dragBy(self, dx, dy):
+                # 页面手势识别出"拖动"后，按位移增量移动窗口（HTCLIENT 下由页面驱动拖动）
+                try:
+                    self.win.move(self.win.x() + int(dx), self.win.y() + int(dy))
+                except Exception:
+                    pass
             @Slot(float, float)
             def cropToChar(self, fx, fy):
                 # 把窗口裁剪到角色实际渲染尺寸（fx,fy = 角色宽/高占窗口比例），

@@ -661,6 +661,40 @@
         if (!dragging) return; var t = e.touches[0]; move({ clientX: t.clientX, clientY: t.clientY });
       }, { passive: false });
       window.addEventListener("touchend", up);
+    } else {
+      // ---- petmode：手势识别「拖动 vs 点击」----
+      // HTCLIENT 下鼠标事件正常进页面。这里做拖动手势：
+      //   - mousedown 记录起点；mousemove 超过阈值 → 调 petHost.dragBy 移动窗口；
+      //   - 未位移的快速 mouseup 视为点击（触发 onPetTap 的 document click 委托）。
+      var pDrag = { down: false, sx: 0, sy: 0, px: 0, py: 0, moved: false };
+      // petDragSupressClick 为共享变量（见 onPetTap 附近声明）
+      function petDown(e) {
+        pDrag.down = true; pDrag.sx = e.clientX; pDrag.sy = e.clientY;
+        pDrag.px = e.clientX; pDrag.py = e.clientY; pDrag.moved = false;
+      }
+      function petMove(e) {
+        if (!pDrag.down) return;
+        var inc = Math.abs(e.clientX - pDrag.px), jnc = Math.abs(e.clientY - pDrag.py);
+        pDrag.px = e.clientX; pDrag.py = e.clientY;
+        if (Math.abs(e.clientX - pDrag.sx) + Math.abs(e.clientY - pDrag.sy) > 6) pDrag.moved = true;
+        if (pDrag.moved && window.Live2DHost && window.Live2DHost.dragBy) {
+          try { window.Live2DHost.dragBy(inc, jnc); } catch (e) {}
+        }
+      }
+      function petUp() {
+        if (pDrag.moved) { petDragSupressClick = Date.now(); }   // 拖完抑制一次 click
+        pDrag.down = false;
+      }
+      window.addEventListener("mousedown", petDown);
+      window.addEventListener("mousemove", petMove);
+      window.addEventListener("mouseup", petUp);
+      window.addEventListener("touchstart", function (e) {
+        var t = e.touches[0]; petDown({ clientX: t.clientX, clientY: t.clientY });
+      }, { passive: false });
+      window.addEventListener("touchmove", function (e) {
+        var t = e.touches[0]; petMove({ clientX: t.clientX, clientY: t.clientY });
+      }, { passive: false });
+      window.addEventListener("touchend", petUp);
     }
 
     // 滚轮缩放（所有模式都启用：在窗口任意位置滚动调整模型大小）
@@ -1134,6 +1168,8 @@
   // （easy_drag 仅在用户拖动时拦截），故此处不加"拖动则忽略"逻辑，只做点击防抖。
   // ============================================================
   var tapT = { last: 0 };
+  // petmode 拖动后抑制一次 click 的时间戳（拖动结束后的 mouseup 会触发 click，需跳过）
+  var petDragSupressClick = 0;
   function onPetTap() {
     if (!PET_CFG.tap.enabled) return;
     var now = Date.now();
@@ -1238,6 +1274,8 @@
       if (!isCanvas) return;
       var onUI = t.closest && t.closest("#l2d-inputbar, #l2d-bubble, #l2d-model-panel, .l2d-topbar, #l2d-toggle-panel");
       if (onUI) return;   // 点到 UI 不算摸宠物
+      // 拖动结束后的 click 跳过（避免拖完误触发点击反应）
+      if (Date.now() - (petDragSupressClick || 0) < 300) return;
       onPetTap();
     });
   }
