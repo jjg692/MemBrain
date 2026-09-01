@@ -1094,7 +1094,9 @@
       if (em) { baseOpen = em.mouth; speedMul = em.speed; }
     }
     if (baseOpen !== null) used = true;
-    lipSpeak(text, undefined, baseOpen, speedMul, b.pitch_hint);
+    // TTS 介入前：对话口型时长固定 5s（不按字数字长计算，
+    // 避免"对话没口型/口型极短"；等接 TTS 后再按其语音时长驱动）。
+    lipSpeak(text, 5000, baseOpen, speedMul, b.pitch_hint);
 
     return used;
   }
@@ -1115,7 +1117,8 @@
     }
     // —— 回退：现有"前端猜"，情绪 → 表情 + 动作 + 同款口型（表情与口型联动）——
     var emo = EMO.fromText(text);
-    lipSpeak(text, undefined, emo.mouth, emo.speed);
+    // TTS 介入前：对话口型时长固定 5s（与 behavior 路径一致）。
+    lipSpeak(text, 5000, emo.mouth, emo.speed);
   }
 
   // 用户输入时角色"倾听/感兴趣"反应（增强生命感，不改对话行为）
