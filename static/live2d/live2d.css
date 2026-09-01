@@ -21,22 +21,26 @@ html.transparent, body.petmode { background: transparent !important; background-
 body.petmode #live2d-canvas {
   background: transparent !important;
   position: fixed; inset: 0;
+  cursor: grab;            /* 整窗可拖，悬停显示手型 */
 }
+body.petmode #live2d-canvas:active { cursor: grabbing; }
 /* L2Dwidget 实际把 canvas 放到它自建的 #live2d-widget 容器里；这里真正定位它 */
 body.petmode #live2d-widget {
   position: fixed !important;
   left: 0 !important; top: 18% !important;
   width: 100vw !important; height: 82vh !important;
   background: transparent !important;
-  cursor: move;
+  cursor: grab;          /* 可拖动手型（悬停） */
 }
+body.petmode #live2d-widget:active { cursor: grabbing; }
 body.petmode #live2d-widget canvas {
   position: absolute !important;
   left: 0 !important; top: 0 !important;
   width: 100vw !important; height: 82vh !important;
   transform-origin: 50% 50% !important;   /* 以中心缩放，滚轮缩放不会跑偏 */
-  cursor: move;
+  cursor: grab;
 }
+body.petmode #live2d-widget canvas:active { cursor: grabbing; }
 body.petmode #live2d-topbar,
 body.petmode #l2d-inputbar,
 body.petmode #l2d-model-panel { display: none !important; }

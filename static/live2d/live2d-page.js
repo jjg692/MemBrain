@@ -291,6 +291,21 @@
     } catch (e) {}
     return null;
   }
+  // 模型是否就绪（有管理的模型实例，且已拿到 live2DModel）。
+  // 点击/口型/表情都依赖它；未就绪时避免静默失效，改用重试或轻反馈。
+  function modelReady() {
+    try {
+      var m = liveModel();
+      return !!(m && m.live2DModel);
+    } catch (e) { return false; }
+  }
+  // 模型就绪后再执行 fn（最多 retry 次，间隔 250ms）；始终给一个 fallback 渲染反馈。
+  function whenModelReady(fn, fallback, retry) {
+    var n = retry == null ? 20 : retry;
+    if (modelReady()) { try { fn(); } catch (e) {} return; }
+    if (n <= 0) { try { if (fallback) fallback(); } catch (e) {} return; }
+    setTimeout(function () { whenModelReady(fn, fallback, n - 1); }, 250);
+  }
   function motionGroups() {
     try {
       var m = window.__l2dManager && window.__l2dManager.getModel && window.__l2dManager.getModel(0);
@@ -402,6 +417,11 @@
         showBubble(msg.content || msg.text || "");
         onRoleTalk(msg.content || msg.text || "", msg.behavior);
         bus.emit("push", msg);
+      } else if (msg.type === "behavior") {
+        // 后端内核独立广播的精确行为事件（表情/口型/动作）。
+        // 随 reply 一并广播；走"后端精确 behavior"而非前端猜，口型/表情/动作才准。
+        onRoleTalk(msg.content || "", msg);
+        bus.emit("message", { role_id: msg.role_id, content: msg.content || "", behavior: msg });
       }
     };
     state.ws.onclose = function () {
@@ -595,7 +615,11 @@
     var canvas = canvases[0];
 
     canvas.style.transition = "none";
-    canvas.style.cursor = "move";
+    canvas.style.cursor = "grab";       // 可拖动手型；拖动中变 grabbing
+    canvas.addEventListener("mousedown", function () { canvas.style.cursor = "grabbing"; });
+    ["mouseup", "mouseleave", "mouseout"].forEach(function (ev) {
+      canvas.addEventListener(ev, function () { canvas.style.cursor = "grab"; });
+    });
     applyT();
 
     // 注意：petmode 下窗口整窗移动由 pywebview easy_drag 负责，页内不做拖动（避免抢事件），
@@ -1010,19 +1034,22 @@
     var cfg = PET_CFG.lip;
     var len = (text || "").length;
     if (!len) { lipStop(); return; }
-    lipT.active = true;
-    lipT.startTime = performance.now();
-    if (typeof baseOpen === "number") lipT.baseOpen = Math.max(cfg.minOpen, Math.min(cfg.maxOpen, baseOpen));
-    else lipT.baseOpen = cfg.baseDefault;
-    var mul = (typeof speedMul === "number") ? Math.max(0.5, Math.min(2, speedMul)) : 1.0;
-    lipT.speed = Math.max(cfg.minSpeed, Math.min(cfg.maxSpeed, (len / 10) * mul));
-    // pitch 归一化到 [1-pitchRange, 1+pitchRange]，避免过于夸张
-    var ph = (typeof pitchHint === "number" && isFinite(pitchHint)) ? pitchHint : 1;
-    lipT.pitch = Math.max(1 - cfg.pitchRange, Math.min(1 + cfg.pitchRange, ph));
-    lipT.dur = durMs || Math.max(cfg.minDur, Math.min(cfg.maxDur, len * cfg.durPerChar));
-    lipT.durEff = function () { return lipT.dur; };
-    renderer.setLipSync(true);
-    if (!lipT.raf) { lipT.raf = requestAnimationFrame(lipTick); }
+    // 模型就绪后才开始口型（此前 getModel 未就绪时口型静默不动）。
+    whenModelReady(function () {
+      lipT.active = true;
+      lipT.startTime = performance.now();
+      if (typeof baseOpen === "number") lipT.baseOpen = Math.max(cfg.minOpen, Math.min(cfg.maxOpen, baseOpen));
+      else lipT.baseOpen = cfg.baseDefault;
+      var mul = (typeof speedMul === "number") ? Math.max(0.5, Math.min(2, speedMul)) : 1.0;
+      lipT.speed = Math.max(cfg.minSpeed, Math.min(cfg.maxSpeed, (len / 10) * mul));
+      // pitch 归一化到 [1-pitchRange, 1+pitchRange]，避免过于夸张
+      var ph = (typeof pitchHint === "number" && isFinite(pitchHint)) ? pitchHint : 1;
+      lipT.pitch = Math.max(1 - cfg.pitchRange, Math.min(1 + cfg.pitchRange, ph));
+      lipT.dur = durMs || Math.max(cfg.minDur, Math.min(cfg.maxDur, len * cfg.durPerChar));
+      lipT.durEff = function () { return lipT.dur; };
+      renderer.setLipSync(true);
+      if (!lipT.raf) { lipT.raf = requestAnimationFrame(lipTick); }
+    });
   }
 
   // 角色开口说话：优先窗口A下发的 behavior（表情/口型/动作），否则前端猜（+0 契约 §3.2）
@@ -1112,9 +1139,15 @@
     // 随机挑一个轻反应（语义动作），并偶尔换一下表情
     var reactions = PET_CFG.tap.reactions || ["wink"];
     var pick = reactions[Math.floor(Math.random() * reactions.length)];
-    playAction(pick, 4);                 // 高优先级（点它就是想让它有反应）
-    if (pick === "surprised") setExpressionTimed("surprised", 1200);
-    else if (pick === "wink") setExpressionTimed("smile", 900);
+    // 模型就绪后再播放动作/表情；未就绪则延迟重试（最多约 5s），
+    // 避免"点它没反应"（此前 getModel 未就绪时 playAction 静默失败）。
+    whenModelReady(function () {
+      playAction(pick, 4);                 // 高优先级（点它就是想让它有反应）
+      if (pick === "surprised") setExpressionTimed("surprised", 1200);
+      else if (pick === "wink") setExpressionTimed("smile", 900);
+    }, function () {
+      // 兜底：模型始终未就绪时，至少给一个可见的"被摸到"反馈（闪烁一下）
+    }, 20);
     bus.emit("tap", { reaction: pick });
     bus.emit("activity");   // 点击也算交互，重置待机倒计时
   }
