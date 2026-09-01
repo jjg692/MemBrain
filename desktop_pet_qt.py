@@ -137,10 +137,14 @@ def build_windows():
         WM_NCHITTEST = HTCLIENT = HTCAPTION = 0
 
     class DraggableWindow(QWidget):
-        """透明悬浮窗：鼠标事件正常进 WebView（HTCLIENT）。
-        窗口拖动改由页面手势识别后经 petHost.dragBy 驱动（见 attach_pethost），
-        这样点击能触发页面交互、悬停能显示手型，而不是被 HTCAPTION 整窗吞掉。
+        """透明悬浮窗：鼠标事件正常进 WebView（HTCLIENT），点击/悬停/手型由页面处理。
+        窗口拖动改由 Qt 层自身完成（mousePress/Move/Release，Windows 原生可靠），
+        不依赖页面 mousemove（透明无焦点窗里页面收鼠标不稳）。
         """
+        def __init__(self):
+            super().__init__()
+            self._drag = {"down": False, "ox": 0, "oy": 0, "sx": 0, "sy": 0, "moved": False}
+
         def nativeEvent(self, eventType, message):
             try:
                 if eventType in (b"windows_generic_MSG", "windows_generic_MSG"):
@@ -148,11 +152,52 @@ def build_windows():
                     msg = wintypes.MSG.from_address(int(message))
                     if msg.message == WM_NCHITTEST:
                         # 返回 HTCLIENT：让所有鼠标事件进入页面（点击/悬停/手型正常）。
-                        # 拖动由页面手势识别 + petHost.dragBy 完成。
                         return (True, HTCLIENT)
             except Exception:
                 pass
             return super().nativeEvent(eventType, message)
+
+        def mousePressEvent(self, event):
+            self._drag["down"] = True
+            self._drag["sx"] = event.globalPosition().x() if hasattr(event.globalPosition(), "x") else event.globalX()
+            self._drag["sy"] = event.globalPosition().y() if hasattr(event.globalPosition(), "y") else event.globalY()
+            self._drag["ox"] = self.window().x()
+            self._drag["oy"] = self.window().y()
+            self._drag["moved"] = False
+            super().mousePressEvent(event)
+
+        def mouseMoveEvent(self, event):
+            if not self._drag["down"]:
+                return
+            gx = event.globalPosition().x() if hasattr(event.globalPosition(), "x") else event.globalX()
+            gy = event.globalPosition().y() if hasattr(event.globalPosition(), "y") else event.globalY()
+            dx = gx - self._drag["sx"]
+            dy = gy - self._drag["sy"]
+            if abs(dx) + abs(dy) > 6:
+                self._drag["moved"] = True
+            if self._drag["moved"]:
+                # 锁窗口中心在屏内，避免拖丢
+                try:
+                    sw, sh = _screen_size()
+                    w = self.window().width(); h = self.window().height()
+                    cx = self._drag["ox"] + dx + w / 2
+                    cy = self._drag["oy"] + dy + h / 2
+                    cx = max(0, min(sw, int(cx)))
+                    cy = max(0, min(sh, int(cy)))
+                    self.window().move(int(cx - w / 2), int(cy - h / 2))
+                except Exception:
+                    pass
+            super().mouseMoveEvent(event)
+
+        def mouseReleaseEvent(self, event):
+            # 拖动结束时，通过页面抑制一次 click（若页面已实现该标记）
+            if self._drag["moved"]:
+                try:
+                    self._view.page().runJavaScript("try{ window.__petDragJustMoved = Date.now(); }catch(e){}")
+                except Exception:
+                    pass
+            self._drag["down"] = False
+            super().mouseReleaseEvent(event)
 
     # ---- QWebChannel 桥：让页面里的滚轮缩放直接调整宿主窗口大小 ----
     # 方案A：窗口是唯一基准。滚轮缩放 → JS 通过 petHost.resizeWindow(w,h) 改窗口尺寸，

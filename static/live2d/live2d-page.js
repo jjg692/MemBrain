@@ -255,7 +255,9 @@
     setLipSync: function (on) {
       var m = liveModel();
       if (!m || !m.setLipSync) return;
-      try { m.setLipSync(!!on); } catch (e) {}
+      // 保留 null：运行时渲染条件 `null == lipSync` 才用 lipSyncValue 写 mouth。
+      // 传 true/false 会关闭该通道（true/false 都不是 null）。
+      try { m.setLipSync(on === null ? null : !!on); } catch (e) {}
     },
     setLipSyncValue: function (v) {
       var m = liveModel();
@@ -667,39 +669,16 @@
       }, { passive: false });
       window.addEventListener("touchend", up);
     } else {
-      // ---- petmode：手势识别「拖动 vs 点击」----
-      // HTCLIENT 下鼠标事件正常进页面。这里做拖动手势：
-      //   - mousedown 记录起点；mousemove 超过阈值 → 调 petHost.dragBy 移动窗口；
-      //   - 未位移的快速 mouseup 视为点击（触发 onPetTap 的 document click 委托）。
-      var pDrag = { down: false, sx: 0, sy: 0, px: 0, py: 0, moved: false };
-      // petDragSupressClick 为共享变量（见 onPetTap 附近声明）
-      function petDown(e) {
-        pDrag.down = true; pDrag.sx = e.clientX; pDrag.sy = e.clientY;
-        pDrag.px = e.clientX; pDrag.py = e.clientY; pDrag.moved = false;
-      }
-      function petMove(e) {
-        if (!pDrag.down) return;
-        var inc = Math.abs(e.clientX - pDrag.px), jnc = Math.abs(e.clientY - pDrag.py);
-        pDrag.px = e.clientX; pDrag.py = e.clientY;
-        if (Math.abs(e.clientX - pDrag.sx) + Math.abs(e.clientY - pDrag.sy) > 6) pDrag.moved = true;
-        if (pDrag.moved && window.Live2DHost && window.Live2DHost.dragBy) {
-          try { window.Live2DHost.dragBy(inc, jnc); } catch (e) {}
-        }
-      }
-      function petUp() {
-        if (pDrag.moved) { petDragSupressClick = Date.now(); }   // 拖完抑制一次 click
-        pDrag.down = false;
-      }
-      window.addEventListener("mousedown", petDown);
-      window.addEventListener("mousemove", petMove);
-      window.addEventListener("mouseup", petUp);
-      window.addEventListener("touchstart", function (e) {
-        var t = e.touches[0]; petDown({ clientX: t.clientX, clientY: t.clientY });
-      }, { passive: false });
-      window.addEventListener("touchmove", function (e) {
-        var t = e.touches[0]; petMove({ clientX: t.clientX, clientY: t.clientY });
-      }, { passive: false });
-      window.addEventListener("touchend", petUp);
+      // ---- petmode：拖动由 Qt 层(DraggableWindow)负责，页面只处理点击 ----
+      // Qt 层 mouseMoveEvent 直接移动窗口；拖动结束时 Qt 注入 __petDragJustMoved，
+      // 这里同步给共享抑制标记，点击委托据此跳过"拖完误触发的 click"。
+      window.addEventListener("mousedown", function () {
+        // 记录按下全局状态（供 Qt 判断无需；仅维持 page 状态一致性）
+      });
+      window.addEventListener("mouseup", function () {
+        try { if (window.__petDragJustMoved && Date.now() - window.__petDragJustMoved < 400) {
+          petDragSupressClick = Date.now(); } } catch (e) {}
+      });
     }
 
     // 滚轮缩放（所有模式都启用：在窗口任意位置滚动调整模型大小）
@@ -1052,8 +1031,9 @@
   function lipStop() {
     lipT.active = false;
     if (lipT.raf) { cancelAnimationFrame(lipT.raf); lipT.raf = 0; }
+    // 关掉 lipSyncValue 通道并复位嘴
     renderer.setLipSync(false);
-    renderer.setMouth(0);
+    renderer.setLipSyncValue(0);
   }
   function lipTick(now) {
     if (!lipT.active) return;
@@ -1064,7 +1044,9 @@
     // pitch 调制：pitch 高(欢快/激动) → 嘴动更快更"雀跃"，低(低落/平淡) → 更缓。
     var effSpeed = lipT.speed * lipT.pitch;
     var open = lipT.baseOpen + cfg.amp * Math.abs(Math.sin(now / 90 * effSpeed));
-    renderer.setMouth(Math.max(cfg.minOpen, Math.min(cfg.maxOpen, open)));
+    // 用 lipSyncValue 驱动（渲染循环每帧写入 PARAM_MOUTH_OPEN_Y），
+    // 而非直接 setParamFloat —— 后者会被渲染循环每帧覆盖，导致嘴不动。
+    renderer.setLipSyncValue(Math.max(cfg.minOpen, Math.min(cfg.maxOpen, open)));
     lipT.raf = requestAnimationFrame(lipTick);
   }
   // 文字转口型：baseOpen=情绪对口型开合基准，speedMul=情绪对口型频率系数，
@@ -1086,7 +1068,11 @@
       lipT.pitch = Math.max(1 - cfg.pitchRange, Math.min(1 + cfg.pitchRange, ph));
       lipT.dur = durMs || Math.max(cfg.minDur, Math.min(cfg.maxDur, len * cfg.durPerChar));
       lipT.durEff = function () { return lipT.dur; };
-      renderer.setLipSync(true);
+      // 关键：setLipSync(null) 让运行时渲染条件 `null == lipSync` 成立，
+      // 每帧用 lipSyncValue 写 PARAM_MOUTH_OPEN_Y，嘴才会动。
+      // 传 true/false 都会关闭该通道（true/false != null）。
+      renderer.setLipSync(null);
+      renderer.setLipSyncValue(lipT.baseOpen);
       if (!lipT.raf) { lipT.raf = requestAnimationFrame(lipTick); }
     });
   }
