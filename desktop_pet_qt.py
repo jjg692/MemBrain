@@ -137,13 +137,31 @@ def build_windows():
         WM_NCHITTEST = HTCLIENT = HTCAPTION = 0
 
     class DraggableWindow(QWidget):
-        """透明悬浮窗：鼠标事件正常进 WebView（HTCLIENT），点击/悬停/手型由页面处理。
-        窗口拖动改由 Qt 层自身完成（mousePress/Move/Release，Windows 原生可靠），
-        不依赖页面 mousemove（透明无焦点窗里页面收鼠标不稳）。
+        """透明悬浮窗：鼠标事件正常进 WebView（HTCLIENT），单击/手型由页面处理；
+        检测到拖动意图后经 begin_native_drag 用 Win32 触发 Windows 原生窗口拖动，
+        与最初 HTCAPTION 版本一样顺滑无抖动，同时保留单击穿透。
         """
         def __init__(self):
             super().__init__()
-            self._drag = {"down": False, "ox": 0, "oy": 0, "sx": 0, "sy": 0, "moved": False}
+            self.setMouseTracking(True)
+
+        def begin_native_drag(self):
+            """把当前按下交给 Windows 原生标题栏拖动（顺滑、无自绘抖动）。
+            用 GetAncestor 拿真正顶层 HWND（winId 可能是子控件），先 ReleaseCapture
+            （鼠标可能被 WebView 捕获），再触发标题栏按下，Windows 才接管拖动。
+            """
+            try:
+                import ctypes
+                GA_ROOT = 2
+                WM_NCLBUTTONDOWN = 0x00A1
+                HTCAPTION = 0x0002
+                hwnd = int(self.winId())
+                top = ctypes.windll.user32.GetAncestor(hwnd, GA_ROOT)
+                # 先释放鼠标捕获（WebView 常占着），否则系统无法接管拖动
+                ctypes.windll.user32.ReleaseCapture()
+                ctypes.windll.user32.SendMessageW(top, WM_NCLBUTTONDOWN, HTCAPTION, 0)
+            except Exception:
+                pass
 
         def nativeEvent(self, eventType, message):
             try:
@@ -156,48 +174,6 @@ def build_windows():
             except Exception:
                 pass
             return super().nativeEvent(eventType, message)
-
-        def mousePressEvent(self, event):
-            self._drag["down"] = True
-            self._drag["sx"] = event.globalPosition().x() if hasattr(event.globalPosition(), "x") else event.globalX()
-            self._drag["sy"] = event.globalPosition().y() if hasattr(event.globalPosition(), "y") else event.globalY()
-            self._drag["ox"] = self.window().x()
-            self._drag["oy"] = self.window().y()
-            self._drag["moved"] = False
-            super().mousePressEvent(event)
-
-        def mouseMoveEvent(self, event):
-            if not self._drag["down"]:
-                return
-            gx = event.globalPosition().x() if hasattr(event.globalPosition(), "x") else event.globalX()
-            gy = event.globalPosition().y() if hasattr(event.globalPosition(), "y") else event.globalY()
-            dx = gx - self._drag["sx"]
-            dy = gy - self._drag["sy"]
-            if abs(dx) + abs(dy) > 6:
-                self._drag["moved"] = True
-            if self._drag["moved"]:
-                # 锁窗口中心在屏内，避免拖丢
-                try:
-                    sw, sh = _screen_size()
-                    w = self.window().width(); h = self.window().height()
-                    cx = self._drag["ox"] + dx + w / 2
-                    cy = self._drag["oy"] + dy + h / 2
-                    cx = max(0, min(sw, int(cx)))
-                    cy = max(0, min(sh, int(cy)))
-                    self.window().move(int(cx - w / 2), int(cy - h / 2))
-                except Exception:
-                    pass
-            super().mouseMoveEvent(event)
-
-        def mouseReleaseEvent(self, event):
-            # 拖动结束时，通过页面抑制一次 click（若页面已实现该标记）
-            if self._drag["moved"]:
-                try:
-                    self._view.page().runJavaScript("try{ window.__petDragJustMoved = Date.now(); }catch(e){}")
-                except Exception:
-                    pass
-            self._drag["down"] = False
-            super().mouseReleaseEvent(event)
 
     # ---- QWebChannel 桥：让页面里的滚轮缩放直接调整宿主窗口大小 ----
     # 方案A：窗口是唯一基准。滚轮缩放 → JS 通过 petHost.resizeWindow(w,h) 改窗口尺寸，
@@ -226,19 +202,23 @@ def build_windows():
                 pass
             @Slot(int, int)
             def dragBy(self, dx, dy):
-                # 页面手势识别出"拖动"后，按位移增量移动窗口（HTCLIENT 下由页面驱动拖动）
-                # 边界：限制窗口中心保持在屏幕内，保证任何时候窗口都有大半可见，不会拖丢。
+                # 兼容保留：原生拖动接管后的兜底（一般不走到）
                 try:
-                    g = self.win.geometry()
+                    w = self.win.width(); h = self.win.height()
                     sw, sh = _screen_size()
-                    # 窗口中心在 [0, sw]/[0, sh] 内 → 窗口必然有大半在屏内
-                    cx = g.x() + g.width() / 2 + int(dx)
-                    cy = g.y() + g.height() / 2 + int(dy)
+                    cx = self.win.x() + w / 2 + int(dx)
+                    cy = self.win.y() + h / 2 + int(dy)
                     cx = max(0, min(sw, int(cx)))
                     cy = max(0, min(sh, int(cy)))
-                    nx = cx - g.width() / 2
-                    ny = cy - g.height() / 2
-                    self.win.move(int(nx), int(ny))
+                    self.win.move(int(cx - w / 2), int(cy - h / 2))
+                except Exception:
+                    pass
+            @Slot()
+            def beginDrag(self):
+                # 页面检测到拖动意图后，把窗口交给 Windows 原生拖动（顺滑）
+                try:
+                    if hasattr(self.win, "begin_native_drag"):
+                        self.win.begin_native_drag()
                 except Exception:
                     pass
             @Slot(float, float)

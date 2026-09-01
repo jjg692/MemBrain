@@ -669,16 +669,41 @@
       }, { passive: false });
       window.addEventListener("touchend", up);
     } else {
-      // ---- petmode：拖动由 Qt 层(DraggableWindow)负责，页面只处理点击 ----
-      // Qt 层 mouseMoveEvent 直接移动窗口；拖动结束时 Qt 注入 __petDragJustMoved，
-      // 这里同步给共享抑制标记，点击委托据此跳过"拖完误触发的 click"。
-      window.addEventListener("mousedown", function () {
-        // 记录按下全局状态（供 Qt 判断无需；仅维持 page 状态一致性）
-      });
-      window.addEventListener("mouseup", function () {
-        try { if (window.__petDragJustMoved && Date.now() - window.__petDragJustMoved < 400) {
-          petDragSupressClick = Date.now(); } } catch (e) {}
-      });
+      // ---- petmode：页面手势识别「拖动 vs 点击」----
+      // 透明窗里鼠标事件能进页面（点击已验证有效）。位移超阈值判定为拖动，
+      // 调用 petHost.beginDrag 触发 Win32 原生窗口拖动（顺滑）；未位移的快速
+      // 释放 = 点击（走 document click 委托 → onPetTap）。
+      var pDrag = { down: false, sx: 0, sy: 0, moved: false, handed: false };
+      function pDown(e) {
+        pDrag.down = true; pDrag.sx = e.clientX; pDrag.sy = e.clientY;
+        pDrag.moved = false; pDrag.handed = false;
+      }
+      function pMove(e) {
+        if (!pDrag.down || pDrag.handed) return;
+        var dx = e.clientX - pDrag.sx, dy = e.clientY - pDrag.sy;
+        if (Math.abs(dx) + Math.abs(dy) > 6) {
+          pDrag.moved = true;
+          // 触发 Win32 原生窗口拖动（顺滑无抖动），之后系统接管，本页不再移动窗口
+          if (window.Live2DHost && window.Live2DHost.beginDrag) {
+            pDrag.handed = true;
+            try { window.Live2DHost.beginDrag(); } catch (e) {}
+          }
+        }
+      }
+      function pUp() {
+        if (pDrag.moved) { petDragSupressClick = Date.now(); }   // 拖完（原生接管）抑制一次 click
+        pDrag.down = false;
+      }
+      window.addEventListener("mousedown", pDown);
+      window.addEventListener("mousemove", pMove);
+      window.addEventListener("mouseup", pUp);
+      window.addEventListener("touchstart", function (e) {
+        var t = e.touches[0]; pDown({ clientX: t.clientX, clientY: t.clientY });
+      }, { passive: false });
+      window.addEventListener("touchmove", function (e) {
+        var t = e.touches[0]; pMove({ clientX: t.clientX, clientY: t.clientY });
+      }, { passive: false });
+      window.addEventListener("touchend", pUp);
     }
 
     // 滚轮缩放（所有模式都启用：在窗口任意位置滚动调整模型大小）
