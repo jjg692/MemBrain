@@ -402,6 +402,8 @@
               "&role_id=" + encodeURIComponent(state.role_id) + "&mode=" + mode;
     try { if (state.ws) state.ws.close(); } catch (e) {}
     state.ws = new WebSocket(url);
+    // 最近一次 reply 的正文（behavior 事件不带 content，需借用它来驱动口型/表情）
+    var lastReplyText = "";
     state.ws.onmessage = function (evt) {
       var msg; try { msg = JSON.parse(evt.data); } catch (e) { return; }
       if (msg.type === "connected") { /* 连接建立 */ }
@@ -409,19 +411,22 @@
       else if (msg.type === "reply") {
         setPending(false);
         showBubble(msg.content || "");
+        lastReplyText = msg.content || "";
         // 对话联动：优先取窗口A下发的 behavior（表情/口型/动作），
         // 没有则回退到"前端猜"（+0 契约 §3.2：向后兼容，对方未完成时不坏）
         onRoleTalk(msg.content || "", msg.behavior);
         bus.emit("message", { role_id: msg.role_id, content: msg.content, behavior: msg.behavior });
       } else if (msg.type === "proactive" || msg.type === "reminder") {
         showBubble(msg.content || msg.text || "");
+        lastReplyText = msg.content || msg.text || "";
         onRoleTalk(msg.content || msg.text || "", msg.behavior);
         bus.emit("push", msg);
       } else if (msg.type === "behavior") {
         // 后端内核独立广播的精确行为事件（表情/口型/动作）。
         // 随 reply 一并广播；走"后端精确 behavior"而非前端猜，口型/表情/动作才准。
-        onRoleTalk(msg.content || "", msg);
-        bus.emit("message", { role_id: msg.role_id, content: msg.content || "", behavior: msg });
+        // behavior 事件本身不带正文，借用最近一次 reply 的文本驱动口型（否则空文本→口型立即停）。
+        onRoleTalk(lastReplyText || msg.content || "", msg);
+        bus.emit("message", { role_id: msg.role_id, content: msg.content, behavior: msg });
       }
     };
     state.ws.onclose = function () {
