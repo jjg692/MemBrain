@@ -193,6 +193,21 @@ def setup_admin(app):
         info = agent.get_session_info(user_id)
         return {"code": 0, "data": info}
 
+    @router.get("/memory/relation")
+    async def view_relation(user_id: str = "default_user", role_id: str = ""):
+        """读取关系记忆内核（自我模型/共同经历/反思/承诺/情绪衰减），按 role_id 的独立 JSON 文件。"""
+        import copy
+        if not role_id:
+            role_id = app.role_manager.get_default_role() or "kasumi"
+        try:
+            from core.relation_memory import get_relation_memory
+            rel = get_relation_memory(role_id)
+            data = copy.deepcopy(rel._data.get(user_id or "default_user", {}))
+            return {"code": 0, "data": data}
+        except Exception as e:
+            log_error("admin.relation", e)
+            return {"code": -1, "message": f"读取关系记忆失败：{e}", "data": {}}
+
     # ===================== 系统统计 =====================
 
     @router.get("/stats")

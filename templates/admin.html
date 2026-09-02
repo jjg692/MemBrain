@@ -67,6 +67,7 @@
     <div class="tab active" data-panel="roles">联系人管理</div>
     <div class="tab" data-panel="memory">记忆查看</div>
     <div class="tab" data-panel="emotion">情感 / 好感度</div>
+    <div class="tab" data-panel="relation">关系记忆</div>
     <div class="tab" data-panel="stats">系统统计</div>
     <div class="tab" data-panel="llm">LLM 管理</div>
     <div class="tab" data-panel="config">配置管理</div>
@@ -126,6 +127,19 @@
         <div style="flex:0 0 auto; display:flex; align-items:flex-end"><button class="btn btn-blue" onclick="loadEmotion()">查询</button></div>
       </div>
       <div id="emotionResult"></div>
+    </div>
+  </div>
+
+  <!-- ===== 关系记忆 ===== -->
+  <div class="panel" id="panel-relation">
+    <div class="card">
+      <h3>关系记忆</h3>
+      <div class="form-row">
+        <div><label>user_id</label><input id="relUserId" value="default_user"></div>
+        <div><label>role_id</label><input id="relRoleId" value="kasumi"></div>
+        <div style="flex:0 0 auto; display:flex; align-items:flex-end"><button class="btn btn-blue" onclick="loadRelation()">查询</button></div>
+      </div>
+      <div id="relationResult"><p class="hint">点击「查询」查看关系记忆（自我模型 / 共同经历 / 反思 / 承诺 / 情绪衰减）。</p></div>
     </div>
   </div>
 
@@ -379,6 +393,84 @@ async function loadEmotion(){
           <div style="background:#eee;border-radius:4px;height:8px;margin-top:4px"><div style="background:#07c160;height:8px;border-radius:4px;width:${(v*100).toFixed(0)}%"></div></div></div>`;
       }).join('')}
     </div>`;
+}
+
+// ===== 关系记忆 =====
+async function loadRelation(){
+  const p=new URLSearchParams({user_id:$('relUserId').value, role_id:$('relRoleId').value});
+  const res=await fetch('/admin/memory/relation?'+p); const json=await res.json();
+  const box=$('relationResult');
+  if(json.code!==0){ box.innerHTML=`<p class="err">${esc(json.message||'读取失败')}</p>`; return; }
+  const d=json.data||{}; box.innerHTML='';
+  const h=t=>`<div style="margin-bottom:14px">${t}</div>`;
+
+  // 自我模型
+  const sm=d.self_model||{};
+  let html=h(`<h4 style="margin-bottom:8px">🧠 自我模型</h4>
+    <p><b>关系认知：</b>${esc(sm.relationship||'—')}</p>
+    <p><b>当前心境：</b>${esc(sm.current_mood_text||'—')}</p>
+    <p><b>自我认知：</b>${esc(sm.summary||'—')}</p>
+    ${(sm.cares_about&&sm.cares_about.length)?`<p><b>在意：</b>${sm.cares_about.map(esc).join('、')}</p>`:''}
+    <p class="hint">更新于 ${esc(sm.updated_at||'—')}</p>`);
+  box.innerHTML+=html;
+
+  // 用户模型
+  const um=d.user_model||{};
+  box.innerHTML+=h(`<h4 style="margin-bottom:8px">👤 对用户的认知</h4>
+    <p><b>概括：</b>${esc(um.about_user||'—')}</p>
+    ${(um.traits&&um.traits.length)?`<p><b>特质：</b>${um.traits.map(esc).join('、')}</p>`:''}
+    ${(um.needs&&um.needs.length)?`<p><b>需求：</b>${um.needs.map(esc).join('、')}</p>`:''}`);
+
+  // 情绪衰减 / 好感度底层
+  const dec=d.decay||{};
+  const aff=dec.affection||{};
+  box.innerHTML+=h(`<h4 style="margin-bottom:8px">📉 情绪衰减通道</h4>
+    <p><b>当前情绪：</b>${esc(dec.emotion&&dec.emotion.primary||'—')} · 强度 ${dec.emotion_intensity_decayed!=null?dec.emotion_intensity_decayed:'—'}</p>
+    <p><b>好感度均值：</b>${dec.affection_avg!=null?dec.affection_avg:'—'} · 心理年龄玩法无关</p>
+    <p class="hint">6 维：喜欢 ${aff.liking!=null?aff.liking.toFixed?aff.liking.toFixed(2):aff.liking:'—'} · 信任 ${aff.trust!=null?(aff.trust.toFixed?aff.trust.toFixed(2):aff.trust):'—'} · 熟悉 ${aff.familiarity!=null?(aff.familiarity.toFixed?aff.familiarity.toFixed(2):aff.familiarity):'—'} · 尊重 ${aff.respect!=null?(aff.respect.toFixed?aff.respect.toFixed(2):aff.respect):'—'} · 兴趣 ${aff.interest!=null?(aff.interest.toFixed?aff.interest.toFixed(2):aff.interest):'—'} · 依恋 ${aff.attachment!=null?(aff.attachment.toFixed?aff.attachment.toFixed(2):aff.attachment):'—'}</p>`);
+
+  // 共同经历
+  const eps=d.episodes||[];
+  box.innerHTML+=h(`<h4 style="margin-bottom:8px">📖 共同经历（${eps.length}）</h4>`);
+  if(!eps.length) box.innerHTML+=`<p class="hint">暂无经历沉淀（共振阈值内的重要对话会自动记录）。</p>`;
+  eps.slice(0,10).forEach(ep=>{
+    box.innerHTML+=`<div style="margin-bottom:10px;padding:8px;background:#f7f7f7;border-radius:6px">
+      <p class="hint">${esc((ep.ts||'').slice(0,19).replace('T',' '))} · 共振 ${ep.resonance!=null?ep.resonance.toFixed?ep.resonance.toFixed(2):ep.resonance:'—'}</p>
+      <p><b>你：</b>${esc(ep.user_msg||'')}</p>
+      <p style="color:#666"><b>Kasumi：</b>${esc((ep.reply||'').slice(0,120))}${(ep.reply||'').length>120?'…':''}</p>
+    </div>`;
+  });
+
+  // 反思
+  const refs=d.reflections||[];
+  box.innerHTML+=h(`<h4 style="margin-bottom:8px">🪞 周期反思（${refs.length}）</h4>`);
+  if(!refs.length) box.innerHTML+=`<p class="hint">尚未触达反思周期。</p>`;
+  refs.slice(0,3).forEach(r=>{
+    const rf=r.reflection||{};
+    box.innerHTML+=`<div style="margin-bottom:10px;padding:8px;background:#f0f7ff;border-radius:6px">
+      <p class="hint">${esc((r.ts||'').slice(0,19).replace('T',' '))}</p>
+      <p>${esc(rf.self_summary||'')}</p>
+      <p style="color:#666">对用户：${esc(rf.about_user||'')}</p>
+    </div>`;
+  });
+
+  // 承诺
+  const pro=d.promises||[];
+  box.innerHTML+=h(`<h4 style="margin-bottom:8px">🤝 承诺（${pro.length}）</h4>`);
+  if(!pro.length) box.innerHTML+=`<p class="hint">暂无记录。承诺在对话中自然沉淀（未兑现/已兑现都会记录）。</p>`;
+  pro.forEach(p=>{
+    const st=p.status||'pending';
+    const stTxt={pending:'待兑现',kept:'已兑现',dropped:'已放下'}[st]||st;
+    const color=st==='kept'?'#07c160':(st==='dropped'?'#999':'#e6a23c');
+    box.innerHTML+=`<div style="margin-bottom:6px"><span style="display:inline-block;padding:1px 8px;border-radius:10px;background:${color}22;color:${color};font-size:12px">${stTxt}</span> ${esc(p.text||'')}</div>`;
+  });
+
+  // 情绪走向
+  const mt=d.mood_trend||{};
+  if(mt.samples){
+    box.innerHTML+=h(`<h4 style="margin-bottom:8px">📈 情绪走向</h4>
+      <p>样本 ${mt.samples} · 平均效价 ${mt.valence_avg!=null?mt.valence_avg:'—'} · 趋势 ${esc(mt.trend||'平稳')}</p>`);
+  }
 }
 
 // ===== 统计 =====

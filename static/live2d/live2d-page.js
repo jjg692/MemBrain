@@ -1090,6 +1090,10 @@
     // 关掉 lipSyncValue 通道并复位嘴
     renderer.setLipSync(false);
     renderer.setLipSyncValue(0);
+    // 说话结束 → 表情恢复默认待机脸（对话时由 applyBehavior/EMO 设置的情绪表情
+    // 用 setExpressionSafe 直接置上、没有 timed 恢复，会一直挂着，直到下次点击才回正。
+    // 这里在口型结束时统一回默认，符合"对话后回到待机表情"的预期。）
+    setExpressionSafe("default");
   }
   function lipTick(now) {
     if (!lipT.active) return;
