@@ -446,23 +446,31 @@ except Exception:
     pass
 
 # MCP 客户端骨架：动态发现并注册外部工具（游戏 MCP 等）。
-# 无 MCP 配置或 server 启动失败时静默降级，不影响既有功能。
+# 受 STARDEW_MCP_ENABLED 总开关控制（默认关闭，规避他人拉取无游戏/无环境也受影响）。
+# 关闭时完全不启动 MCP server、不注册工具（LLM 看不到）；开启时才加载。
+# 即便开启但 server 启动失败，也 try/except 静默降级，不影响既有功能。
+_mcp = None
 try:
-    from core.mcp_client import get_mcp_manager, McpError
-    _mcp = get_mcp_manager()
-    _mcp.load()
-    if _mcp.servers:
-        ALL_TOOLS.extend(_mcp.schemas())
-        for tname in _mcp.tool_names():
-            def _mk(tname):
-                def _call(arguments=None, **kw):
-                    return _mcp.call(tname, arguments or kw)
-                return _call
-            TOOL_REGISTRY[tname] = _mk(tname)
-except Exception as e:
-    from core.logger import log_error
-    log_error("MCP", f"MCP 注册失败（跳过）: {e}")
-    _mcp = None
+    from core.config import STARDEW_MCP_ENABLED
+except Exception:
+    STARDEW_MCP_ENABLED = False
+if STARDEW_MCP_ENABLED:
+    try:
+        from core.mcp_client import get_mcp_manager, McpError
+        _mcp = get_mcp_manager()
+        _mcp.load()
+        if _mcp.servers:
+            ALL_TOOLS.extend(_mcp.schemas())
+            for tname in _mcp.tool_names():
+                def _mk(tname):
+                    def _call(arguments=None, **kw):
+                        return _mcp.call(tname, arguments or kw)
+                    return _call
+                TOOL_REGISTRY[tname] = _mk(tname)
+    except Exception as e:
+        from core.logger import log_error
+        log_error("MCP", f"MCP 注册失败（跳过）: {e}")
+        _mcp = None
 
 
 def execute_tool(name: str, arguments: dict) -> str:

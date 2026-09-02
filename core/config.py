@@ -99,6 +99,12 @@ MEMORY_IMPORTANCE_THRESHOLD = float(os.getenv("MEMORY_IMPORTANCE_THRESHOLD", "0.
 MEMORY_FACT_DECAY_DAYS = _int(os.getenv("MEMORY_FACT_DECAY_DAYS"), 90)
 MEMORY_DEBUG = _bool(os.getenv("MEMORY_DEBUG"))
 
+# ===================== 外部 MCP 扩展（星露谷等） =====================
+# 是否启用外部 MCP 游戏扩展（默认关闭：他人拉取无游戏/无环境也不受影响）。
+# 开启后才会去读取 config/mcp.json 并注册 stardew 工具；关闭时这些工具完全不注册。
+# 可在管理后台 /admin/config 里修改。
+STARDEW_MCP_ENABLED = _bool(os.getenv("STARDEW_MCP_ENABLED", "false"))
+
 # ===================== L3 主动信息池 =====================
 # 是否启用 L3 采集/推送（默认启用；设为 false 可关闭）
 L3_ENABLED = _bool(os.getenv("L3_ENABLED", "true"))
@@ -185,6 +191,7 @@ EDITABLE_KEYS = {
     "MEMORY_DEBUG": ("调试输出", "bool", MEMORY_DEBUG),
     "BAIDU_API_KEY": ("百度搜索 Key", "str", BAIDU_API_KEY),
     "LIVE2D_BODY_MODE": ("Live2D 情绪表达模式 (B/C)", "str", LIVE2D_BODY_MODE),
+    "STARDEW_MCP_ENABLED": ("星露谷 MCP 扩展", "bool", STARDEW_MCP_ENABLED),
 }
 
 

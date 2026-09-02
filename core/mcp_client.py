@@ -216,11 +216,17 @@ class McpManager:
         for sc in servers_cfg:
             name = sc.get("name") or sc.get("command", "mcp")
             try:
+                # 路径锚定：支持 {PROJECT_ROOT} 占位符 -> 项目根绝对路径，
+                # 避免依赖启动时的工作目录（他人拉项目在任意目录跑也能工作）。
+                args = [self._resolve(p) for p in (sc.get("args") or [])]
+                env = dict(sc.get("env") or {})
+                for k, v in env.items():
+                    env[k] = self._resolve(v)
                 srv = McpServer(
                     name=name,
-                    command=sc["command"],
-                    args=sc.get("args", []),
-                    env=sc.get("env"),
+                    command=self._resolve(sc["command"]),
+                    args=args,
+                    env=env,
                 )
                 srv.start()
                 srv.build_schemas()
@@ -234,6 +240,13 @@ class McpManager:
                 from core.logger import log_error
                 log_error("MCP", f"加载 server '{name}' 失败: {e}")
         self._loaded = True
+
+    @staticmethod
+    def _resolve(p: str) -> str:
+        """把含 {PROJECT_ROOT} 的字符串解析为绝对路径（其余原样返回）。"""
+        if isinstance(p, str) and "{PROJECT_ROOT}" in p:
+            return p.replace("{PROJECT_ROOT}", str(PROJECT_ROOT))
+        return p
 
     def _read_config(self) -> dict:
         if not self.config_path.exists():

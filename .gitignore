@@ -27,3 +27,14 @@ relation_memory_*.json
 
 # 本地回滚备份区域（不进 git）
 /backup/
+
+# ===================== 星露谷 MCP 扩展（stardew/） =====================
+# Node MCP server 依赖与构建产物（他人拉项目后 npm install + npm run build 自行生成）
+stardew/StardewValley-MCP/mcp-server/node_modules/
+stardew/StardewValley-MCP/mcp-server/build/
+# SMAPI mod 构建产物与运行时桥接文件（进游戏才生成）
+stardew/StardewValley-MCP/smapi-mod/bin/
+stardew/StardewValley-MCP/smapi-mod/obj/
+stardew/StardewValley-MCP/smapi-mod/bridge_data.json
+stardew/StardewValley-MCP/smapi-mod/actions.json
+stardew/StardewValley-MCP/smapi-mod/actions/
