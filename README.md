@@ -44,6 +44,7 @@
 | 🔍 自治路由 | 无路由层/改写层，LLM 自主决定是否调用工具 |
 | 🛠️ 工具调用 | `search_web`（意图路由：Open-Meteo 天气/维基百科/百度/DuckDuckGo）、`control_pc`（打开应用/浏览器/文件/执行命令）、提醒/时间/文件等共 9 个工具 |
 | 💗 情感 / 好感度 | 模式 B 两阶段，6 维好感度跨会话持久化，好感度驱动**关系阶段**（陌生→熟悉→亲密→挚友） |
+| 🧬 关系记忆内核 | 持续存在的**自我模型** / **共同经历账本** / **情绪随时间衰减** / **周期反思**（异步沉淀对用户的理解与角色的内在状态，注入 system prompt） |
 | 🕒 感知层 | 时序/系统环境/位置情境/作息习惯/情绪趋势/忙碌在场/关系投入/作息异常 |
 | ⏰ 日程提醒 | ReminderStore + 调度线程，到点调用 Agent 主动开口并 WS 推送（离线待上线补推） |
 | 🖥️ 后台管理 | 联系人/记忆/情感/统计/配置 一体管理 |
@@ -303,6 +304,7 @@ agent-web-refactor/
 │   ├── user_profile.py        # 用户资料（昵称）
 │   ├── memory/                # 五层记忆（vector_store + memory_manager）
 │   ├── emotion/               # 情感 + 好感度（emotion / affection / emotion_store）
+│   ├── relation_memory.py     # 关系记忆内核（自我模型 / 共同经历 / 时间衰减 / 周期反思）
 │   ├── role/                  # 角色管理（manager.py）
 │   └── room/                  # 群聊房间（message_bus + room_manager）
 ├── agent/

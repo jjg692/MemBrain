@@ -135,24 +135,50 @@ def _extract_json(text: str) -> str:
 RELATION_STAGES = ["陌生", "熟悉", "亲密", "挚友"]
 
 
-def relationship_stage(affection: AffectionState) -> str:
-    """由好感度推导当前关系阶段（陌生 / 熟悉 / 亲密 / 挚友）
+def relationship_stage(affection: AffectionState, experience: Optional[Dict] = None) -> str:
+    """由好感度 + 共同经历推导当前关系阶段（陌生 / 熟悉 / 亲密 / 挚友）
 
     综合 6 维，重点看 familiarity（熟悉）+ attachment（依恋）+ trust（信任）。
     依恋初始低（0.3）需时间积累，天然把"熟识"与"深交"区分开。
+
+    ②"有原因的演化"：experience（可选 dict）提供共同经历的**证据**，让升段"因为有
+    共同经历"而非纯数字跳变：
+      - shared_episodes  : 有意义的共同经历条数（累计）
+      - major_events     : 重大/正向事件数（安慰、一起达成、约定等）
+      - days_known       : 相识天数
+    当经历证据足够时，可把阶段"提前一档"（有据可依），不会无证据地凭空升级。
     """
     familiar = getattr(affection, "familiarity", 0.5)
     attach = getattr(affection, "attachment", 0.3)
     trust = getattr(affection, "trust", 0.5)
-    liking = getattr(affection, "liking", 0.5)
 
+    experience = experience or {}
+    shared = int(experience.get("shared_episodes", 0))
+    major = int(experience.get("major_events", 0))
+    days = float(experience.get("days_known", 0) or 0)
+
+    base = "陌生"
     if familiar >= 0.75 and attach >= 0.75 and trust >= 0.75:
-        return "挚友"
-    if familiar >= 0.6 and attach >= 0.5 and trust >= 0.5:
-        return "亲密"
-    if familiar >= 0.4 and trust >= 0.4:
-        return "熟悉"
-    return "陌生"
+        base = "挚友"
+    elif familiar >= 0.6 and attach >= 0.5 and trust >= 0.5:
+        base = "亲密"
+    elif familiar >= 0.4 and trust >= 0.4:
+        base = "熟悉"
+    else:
+        base = "陌生"
+
+    # 有原因的演化："足够经历"可把阶段提升（封顶挚友），否则维持数字决定的阶段
+    stage = base
+    if base == "陌生":
+        if shared >= 6 and days >= 7:
+            stage = "熟悉"
+    elif base == "熟悉":
+        if (shared >= 15 or major >= 2) and days >= 14:
+            stage = "亲密"
+    elif base == "亲密":
+        if (shared >= 30 or major >= 4) and days >= 30:
+            stage = "挚友"
+    return stage
 
 
 def relation_call_name(stage: str, nickname: str = "") -> str:
@@ -191,12 +217,13 @@ def _stage_behavior_text(stage: str) -> str:
     return m.get(stage, m["陌生"])
 
 
-def relation_to_prompt_text(affection: AffectionState, nickname: str = "") -> str:
+def relation_to_prompt_text(affection: AffectionState, nickname: str = "", experience: Optional[Dict] = None) -> str:
     """构造"关系养成"注入块：关系阶段 + 称呼风格 + 行为约束
 
     让好感度（而不是模型自觉）真正驱动行为差异。
+    experience：共同经历证据（可选），用于"有原因的演化"（见 relationship_stage）。
     """
-    stage = relationship_stage(affection)
+    stage = relationship_stage(affection, experience)
     name_style = relation_call_name(stage, nickname)
     behavior = _stage_behavior_text(stage)
     return f"""

@@ -38,6 +38,10 @@ from core.role.manager import RoleManager
 from core.room.message_bus import MessageBus
 from core.behavior import BehaviorMapper
 from agent.planner import TaskPlanner
+from core.config import LIVE2D_BODY_MODE
+from core.body_tools import merge_express
+
+from core.relation_memory import RelationMemory, get_relation_memory, half_life_decay, build_reflection_prompt, parse_reflection
 
 
 class LangGraphMemoryAgent:
@@ -67,6 +71,9 @@ class LangGraphMemoryAgent:
         self.tool_fallback = tool_fallback
         # 最近一次回复的行为事件（供 WS 层随 reply 一起广播；无副作用仅缓存）
         self._last_behavior: Optional[Dict] = None
+        # 关系记忆内核：持续存在的自我模型 / 共同经历账本 / 时间衰减（底层内在状态层）
+        # 按 role_id 共享实例（role 内部按 user 分账），与五层记忆的 role 隔离语义一致。
+        self.relation: Optional[RelationMemory] = None  # 惰性：首次需要时用 get_relation_memory(role_id)
         # M2 多步任务规划器（纯函数、确定性，可注入替身便于测试/关闭）
         self.task_planner = None  # 惰性：首次使用时确定为 TaskPlanner（可用 False 关闭）
         # 最近一次图运行的 task_status / plan（供 WS/test 读取任务收敛结果；无副作用）
@@ -101,6 +108,90 @@ class LangGraphMemoryAgent:
 
     # ===================== 每用户会话状态 =====================
 
+    def _timing_hint(self, user_id: str) -> str:
+        """④ 主动择时：用感知层判断"此刻是否适合主动、该说什么"。
+
+        复用 PerceptionManager 已采集的数据（不新增采集、不额外调 LLM）：
+        - 长时间没联系 -> "想念/关心"时机；
+        - 深夜且平时安静 -> "熬夜关心"时机（克制）；
+        - 在正常时段 -> 不额外加择时，保持自然。
+        返回一句可注入的"此刻时机"提示；没有明确时机时返回空串。
+        """
+        try:
+            perception = getattr(self, "perception", None)
+            if perception is None:
+                return ""
+            day_hint = ""
+            quiet_hint = ""
+            # 断联/在场（感知层 attendance）
+            try:
+                att = perception.routine.attendance(user_id)
+                if att and att.get("has_log"):
+                    days = int(att.get("days_since_contact", 0) or 0)
+                    if days >= 3:
+                        day_hint = f"你们好几天没聊了（约{days}天），可以自然地想念/关心一下。"
+                    elif days <= 0:
+                        day_hint = "用户刚刚还在，可以轻松地招呼一句。"
+            except Exception:
+                pass
+            # 深夜且平时安静 -> 熬夜关心
+            try:
+                from core.perception import time_situation
+                t = time_situation()
+                if t.get("period") in ("深夜", "清晨"):
+                    quiet = perception.routine.quiet_hours(user_id)
+                    qt = getattr(perception.routine, "quiet_hours", None)
+                    if qt and quiet and t["now"] and (int(t["now"][11:13]) if len(t["now"]) >= 13 else -1) in quiet:
+                        quiet_hint = "这个点你平时通常睡了，如果你还在线，可以温柔提一句别太晚。"
+            except Exception:
+                pass
+            parts = [h for h in (day_hint, quiet_hint) if h]
+            if not parts:
+                return ""
+            return "· 此刻时机：" + " ".join(parts[:2])
+        except Exception:
+            return ""
+
+    def _compose_proactive_hint(self, user_id: str, trigger: str = "", context: str = "") -> str:
+        """主动性 harness 辅助：从关系记忆里挑"此刻值得主动开口"的素材。
+
+        优先级（克制、有界、不强制）：
+        1. 未兑现的承诺（人格一致性：自然地记起答应过的事）
+        2. 最近鲜活经历 / 共同兴趣（记忆召回）
+        3. 用户情绪走向（情感智力：在对方低落时给一句关心）
+        纯 harness 确定性挑选，不额外调 LLM；生成自然语句仍交给主模型。
+        """
+        try:
+            rel = self._get_relation()
+            if rel is None:
+                return ""
+            lines = []
+            # 0) 择时：感知层判断此刻是否适合主动、更合适说什么（④ 主动择时）
+            timing = self._timing_hint(user_id)
+            if timing:
+                lines.append(timing)
+            # 1) 未兑现承诺
+            promises = rel.pending_promises(user_id, n=3)
+            if promises:
+                lines.append("- 你可能答应过/记得要做的是：" + "；".join(
+                    "「%s」" % str(p.get("text", ""))[:40] for p in promises))
+            # 2) 鲜活经历 / 共同话题（最近 3 条，按话题相关度，取共通点）
+            recall = rel.decayed_episodes(user_id, n=6, min_vitality=0.3)
+            topics = []
+            for ep in recall:
+                msg = str(ep.get("user_msg", "")).strip()
+                if msg and len(msg) >= 2:
+                    topics.append(msg[:30])
+            if topics:
+                lines.append("- 你们最近聊过：" + "、".join(topics[:3]))
+            # 3) 情绪走向（若明显偏负，提示一句关心）
+            mood = rel._mood_trend_text(user_id)
+            if mood and ("变差" in mood):
+                lines.append("- 用户最近情绪不太好，可以温柔地关心一句（别追问、别施压）。")
+            return "\n".join(lines)
+        except Exception:
+            return ""
+
     def _get_session(self, user_id: str) -> dict:
         """获取用户的会话状态（L1 列表、情感、好感度）"""
         if user_id not in self._user_states:
@@ -108,6 +199,16 @@ class LangGraphMemoryAgent:
             self.memory.cold_start_load(user_id, self.role_id)
             emotion = self.emotion_store.load_emotion(user_id, self.role_id) or EmotionState.default()
             affection = self.emotion_store.load_affection(user_id, self.role_id) or AffectionState.default()
+            # 关系记忆内核：冷加载时对跨会话的情绪/好感度做**真实时间衰减**
+            # （久别再聊，强度/好感度会像真人一样向基线回落，而不是冻结在旧瞬时值）
+            try:
+                rel = self._get_relation()
+                if rel is not None:
+                    emo_d, aff_d = rel.decay_state(user_id, emotion, affection)
+                    emotion = emo_d or emotion
+                    affection = aff_d or affection
+            except Exception:
+                pass
             self._user_states[user_id] = {
                 "l1": self.memory.get_l1(user_id, self.role_id),
                 "emotion": emotion,
@@ -216,7 +317,7 @@ class LangGraphMemoryAgent:
 
         # 构建 system prompt
         base_prompt = self._build_system_prompt(
-            session, retrieval, user_id, role_id, state.get("room_context")
+            session, retrieval, user_id, role_id, state.get("room_context"), user_msg
         )
         # M2：任务上下文注入（若有 plan）——让 LLM 知道当前是多步任务及进度
         if plan:
@@ -436,7 +537,7 @@ class LangGraphMemoryAgent:
 
     # ===================== 辅助 =====================
 
-    def _build_system_prompt(self, session, retrieval, user_id, role_id, room_context=None) -> str:
+    def _build_system_prompt(self, session, retrieval, user_id, role_id, room_context=None, user_msg="") -> str:
         lines = [self.system_prompt or f"你是角色 {role_id}。"]
         lines.append(f"【当前日期】{datetime.now().strftime('%Y年%m月%d日')}")
 
@@ -472,10 +573,31 @@ class LangGraphMemoryAgent:
             lines.append("【你记得的关于用户的事实】\n" + "\n".join(f"- {f}" for f in facts))
 
         # 情感 + 好感度（模式B 第二阶段注入）
-        lines.append(emotion_to_prompt_text(session["emotion"], session["affection"]))
+        # 认知架构统一：以"衰减后的内在状态"为单一事实源，避免即时值与内核注入不一致。
+        # decay_state 返回副本、不修改入参；久别再聊时强度/好感度会自然回到基线。
+        _emo, _aff = session["emotion"], session["affection"]
+        try:
+            rel_cur = self._get_relation()
+            if rel_cur is not None:
+                _de, _da = rel_cur.decay_state(user_id, _emo, _aff)
+                if _de is not None:
+                    _emo = _de
+                if _da is not None:
+                    _aff = _da
+        except Exception:
+            pass
+        lines.append(emotion_to_prompt_text(_emo, _aff))
         # 关系养成：好感度 -> 关系阶段 -> 行为差异（称呼 + 距离感 + 开放度），
-        # 使好感度真正驱动角色行为，而非仅注入数值
-        lines.append(relation_to_prompt_text(session["affection"], nickname))
+        # 使好感度真正驱动角色行为，而非仅注入数值（用衰减后的好感度推导关系阶段）
+        # ② 有原因的演化：共同经历证据参与升段判断（经历足够时阶段可提前，且"有据可依"）
+        _exp = None
+        try:
+            _rel_stage = self._get_relation()
+            if _rel_stage is not None:
+                _exp = _rel_stage.experience_evidence(user_id)
+        except Exception:
+            _exp = None
+        lines.append(relation_to_prompt_text(_aff, nickname, experience=_exp))
 
         # 感知层：时序/系统/位置情境/作息/情绪趋势（让角色"意识到当下时空与用户状态"）
         if getattr(self, "perception", None) is not None:
@@ -485,6 +607,16 @@ class LangGraphMemoryAgent:
                     lines.append("【你对当下时空与用户状态的感知】\n" + perception_text)
             except Exception:
                 pass
+
+        # 关系记忆内核：持续存在的自我模型 / 对用户的长久理解 / 共同经历（底层内在状态层）
+        try:
+            rel = self._get_relation()
+            if rel is not None:
+                rel_txt = rel.summary_text(user_id, max_chars=360, query=user_msg)
+                if rel_txt:
+                    lines.append("【你的内在状态与和用户的长久积累】\n" + rel_txt)
+        except Exception:
+            pass
 
         lines.append(
             "【我还能做到】有些事我可以直接帮你办妥：\n"
@@ -501,6 +633,26 @@ class LangGraphMemoryAgent:
             "   · 纯社交寒暄、闲聊、开玩笑、分享计划——这些都**不需要任何网络查询**。\n"
             "   只有用户**明确要求**查实时/最新/外部资料时，才调用 search_web。"
         )
+
+        # Live2D 身体表达（C 方案）：告知 LLM 它有一个身体，情绪会自动映射成表情/动作
+        # 只在 C 模式注入；B 模式由 express_body 工具承担"主动指挥"，不必重复告知自动映射。
+        try:
+            if LIVE2D_BODY_MODE == "B":
+                lines.append(
+                    "【你的身体表达】你拥有一个 Live2D 形象(能表情/动作/情绪的肢体)。"
+                    "当你想用肢体强调某个情绪或动作(如开心挥手、惊讶睁眼致敬)时，"
+                    "调用 express_body 工具来指挥身体；调用后自然说出你的话即可。"
+                    "不要为了调用而调用——只需在真正想表达肢体/情绪强度时使用。"
+                )
+            else:
+                lines.append(
+                    "【你的身体】你拥有一个 Live2D 形象，能通过表情(眉眼/嘴巴/脸颊)、"
+                    "头部姿态和肢体动作表达情绪。你就自然地按当下情绪说话即可，"
+                    "你的情绪会自动同步到形象的表情与动作上，无需特别说明或输出指令。"
+                )
+        except Exception:
+            pass
+
         if room_context:
             lines.append("【当前群聊上下文】\n" + room_context)
         return "\n\n".join(lines)
@@ -527,12 +679,25 @@ class LangGraphMemoryAgent:
         try:
             emotion_state = session.get("emotion")
             self._last_behavior = BehaviorMapper.derive_from_state(reply, emotion_state)
+            # B 方案：若本轮回合 LLM 调用过 express_body，把其主动指定的情绪/表情/动作
+            # 并入 behavior（LLM 主动指挥优先于自动映射；无调用则原样返回，向后兼容）
+            if LIVE2D_BODY_MODE == "B":
+                self._last_behavior = merge_express(self._last_behavior)
         except Exception:
             self._last_behavior = None
 
         def worker():
             self.memory.save_short_term(user_id, self.role_id, user_msg, reply)
             self.memory.judge_and_extract_facts(user_id, self.role_id, user_msg, reply)
+            # 关系记忆内核：沉淀共同经历 + 周期反思（底层内在状态层，异步不阻塞回复）
+            self._relation_after_reply(user_id, user_msg, reply, session)
+            # 承诺兑现闭环：用户表达"谢谢/记得/办到了"等确认时，把相关承诺标记为已兑现
+            try:
+                rel_c2 = self._get_relation()
+                if rel_c2 is not None:
+                    rel_c2.resolve_promises_on_user_signal(user_id, user_msg)
+            except Exception:
+                pass
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -549,6 +714,98 @@ class LangGraphMemoryAgent:
     def _persist_emotion(self, user_id, session):
         self.emotion_store.save_emotion(user_id, self.role_id, session["emotion"])
         self.emotion_store.save_affection(user_id, self.role_id, session["affection"])
+
+    def _get_relation(self):
+        """惰性取关系记忆内核实例（按 role_id；可被测试注入替身）。"""
+        if self.relation is None:
+            try:
+                self.relation = get_relation_memory(self.role_id)
+            except Exception:
+                self.relation = None
+        return self.relation
+
+    def _relation_after_reply(self, user_id, user_msg, reply, session):
+        """关系记忆内核写入钩子（后台 worker 线程调用，不阻塞回复）。
+        1. 写共同经历账本（共振阈值过滤日常闲聊；有 impact 的算重要）。
+        2. 融合当前情绪/好感度到衰减通道。
+        3. 距上次反思超过 RELATION_REFLECT_INTERVAL 时，用 LLM 做周期反思并沉淀。
+        """
+        try:
+            rel = self._get_relation()
+            if rel is None:
+                return
+            emotion_state = session.get("emotion")
+            emotion_dict = None
+            if emotion_state is not None and hasattr(emotion_state, "to_dict"):
+                try:
+                    emotion_dict = emotion_state.to_dict()
+                except Exception:
+                    emotion_dict = None
+            resonance = 0.4
+            if emotion_dict:
+                try:
+                    intensity = float(emotion_dict.get("intensity") or 0.5)
+                    valence = float(emotion_dict.get("valence") or 0.0)
+                    resonance = round(0.3 + intensity * (0.5 + abs(valence) * 0.5), 3)
+                except Exception:
+                    resonance = 0.4
+            impact = self._detect_impact(reply, user_msg)
+            rel.add_episode(user_id, user_msg, reply, emotion=emotion_dict,
+                            resonance=resonance, impact=impact)
+            if emotion_state is not None or session.get("affection") is not None:
+                rel.apply_decay(user_id, emotion_state, session.get("affection"))
+            rel.mark_active(user_id)
+            try:
+                from core.config import RELATION_REFLECT_INTERVAL
+                interval = RELATION_REFLECT_INTERVAL
+            except Exception:
+                interval = 0
+            if interval and interval > 0:
+                last = (rel.latest_reflection(user_id) or {}).get("ts", "")
+                if not last:
+                    self._maybe_reflect(user_id, rel)
+                else:
+                    from datetime import datetime as _dt
+                    try:
+                        delta = (_dt.now() - _dt.fromisoformat(last)).total_seconds()
+                        if delta >= interval:
+                            self._maybe_reflect(user_id, rel)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    @staticmethod
+    def _detect_impact(reply, user_msg):
+        """粗略识别实际动作（布尔提示，不替代 LLM）。"""
+        reply = reply or ""
+        marks = ("已为你设置提醒", "已在浏览器打开", "已打开", "已写入", "搜索结果", "当前天气", "当前气温", "已提醒")
+        return "做出了一个实际动作" if any(k in reply for k in marks) else None
+
+    def _maybe_reflect(self, user_id, rel):
+        """用 LLM 做一次周期反思并沉淀（失败/不可用静默跳过）。
+
+        候选经历数量受 RELATION_REFLECT_BATCH 配置约束（落地批量配置），
+        避免单次反思把大量候选经历全塞进 prompt 造成膨胀。
+        """
+        try:
+            try:
+                from core.config import RELATION_REFLECT_BATCH
+                batch = RELATION_REFLECT_BATCH
+            except Exception:
+                batch = 0
+            episodes = rel.decayed_episodes(user_id, n=max(batch or 0, 6))
+            if not episodes:
+                return
+            last = rel.latest_reflection(user_id)
+            prev = last.get("reflection", {}) if last else {}
+            prompt = build_reflection_prompt(episodes, prev, max_batch=batch)
+            text = self.tool_adapter.chat([{"role": "user", "content": prompt}]).strip()
+            data = parse_reflection(text)
+            if isinstance(data, dict) and data:
+                rel.store_reflection(user_id, data)
+        except Exception:
+            pass
 
     # ===================== 对外接口 =====================
 
@@ -600,16 +857,24 @@ class LangGraphMemoryAgent:
         """
         try:
             session = self._get_session(user_id)
+            # 主动性（harness 辅助）：从关系记忆里挑"此刻值得主动开口"的素材，
+            # 让主动不再只是"到点问候"，而是结合承诺/记忆漏洞/鲜活经历/最近话题。
+            proactive_hint = self._compose_proactive_hint(user_id, trigger, context)
             prompt_bits = [self.system_prompt or f"你是角色 {self.role_id}。"]
             prompt_bits.append(f"【当前日期】{datetime.now().strftime('%Y年%m月%d日')}")
             if trigger:
                 prompt_bits.append(f"【触发原因】{trigger}")
             if context:
                 prompt_bits.append(f"【背景信息】{context}")
+            if proactive_hint:
+                prompt_bits.append("【此刻可以自然地提起的】\n" + proactive_hint)
             prompt_bits.append(
                 "现在需要你【主动开口】和用户说一句话。"
-                "不是回复提问，而是作为一个有感情的角色主动发起的问候/分享/关切。"
+                "不是回复提问，而是作为一个有感情的角色自然发起的问候/分享/关切。"
+                "优先自然地提起上面【此刻可以自然地提起的】里的内容（比如记得对方的承诺、"
+                "上次聊到一半的话题、或一句关心），但不要生硬地罗列、不要复述'我有一条承诺'之类。"
                 "请保持角色性格，自然、简短（1-3 句），不要加任何前缀如'系统提示'。"
+                "没有合适的话题时，就自然地问候或分享一件小事。"
                 "直接输出要说的话。"
             )
             sys_prompt = "\n\n".join(prompt_bits)

@@ -18,7 +18,12 @@ static/avatars/agents/*.png
 user_profiles.json
 reminders.json
 perception.json
+relation_memory.json
+relation_memory_*.json
 
 # 测试：纳入源码（test_*.py / conftest.py / README.md），排除生成物
 /test/__pycache__/
 /test/test_results.txt
+
+# 本地回滚备份区域（不进 git）
+/backup/

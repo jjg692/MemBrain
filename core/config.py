@@ -18,9 +18,16 @@ def _bool(value) -> bool:
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
-def _int(value, default: int) -> int:
+def _int(value, default: int = 0) -> int:
     try:
         return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return default
 
@@ -121,6 +128,29 @@ PERCEPTION_FILE = str(Path(PROJECT_ROOT) / os.getenv("PERCEPTION_FILE", "percept
 MOOD_TREND_MAX_SAMPLES = _int(os.getenv("MOOD_TREND_MAX_SAMPLES"), 200)
 ROUTINE_WINDOW_DAYS = _int(os.getenv("ROUTINE_WINDOW_DAYS"), 30)
 
+
+# ===================== 关系记忆内核（自我模型 / 共同经历 / 情绪衰减） =====================
+# 关系记忆 JSON 持久化文件（与 ChromaDB 解耦，避免嵌入调用）
+RELATION_MEMORY_FILE = str(Path(PROJECT_ROOT) / os.getenv("RELATION_MEMORY_FILE", "relation_memory.json"))
+# 是否启用关系记忆内核（写经历账本 / 情绪衰减 / 反思线程）
+RELATION_MEMORY_ENABLED = _bool(os.getenv("RELATION_MEMORY_ENABLED", "true"))
+# 情绪/好感度/经历随时间衰减的半衰期（天）；0=不衰减
+RELATION_EMOTION_HALFLIFE_DAYS = _float(os.getenv("RELATION_EMOTION_HALFLIFE_DAYS", "21"))
+# 写入经历账本所需的最小情绪共振（0-1）；低于此值的日常闲聊不写入经历
+RELATION_EPISODE_RESONANCE_THRESHOLD = _float(os.getenv("RELATION_EPISODE_RESONANCE_THRESHOLD", "0.55"))
+# 反思线程启动间隔（秒）；0=禁用后台自动反思
+RELATION_REFLECT_INTERVAL = _int(os.getenv("RELATION_REFLECT_INTERVAL", "3600"))
+# 单次反思最多处理多少条候选经历
+RELATION_REFLECT_BATCH = _int(os.getenv("RELATION_REFLECT_BATCH", "20"))
+
+# ===================== Live2D 情绪身体表达（B/C 方案开关） =====================
+# 控制 LLM 如何"用身体表达情绪"：
+#   - "C"（默认推荐）：内核自动映射。LLM 只需自然地说话，内核把情绪/文本映射为行为
+#     （改 system prompt 告知 LLM 有身体，并确保 behavior 携带 emotion 供前端 A 状态层保持）
+#   - "B"：LLM 主动指挥。额外注册 express_body 工具，让 LLM 在回复时主动指定动作/表情，
+#     并调用工具（更"懂"身体，但多一次工具调用，token/延迟增加）
+LIVE2D_BODY_MODE = os.getenv("LIVE2D_BODY_MODE", "C").strip().upper()
+
 # ===================== Live2D（桌面宠物模型） =====================
 # 模型根目录：此目录下每个子目录视为一个可用模型（内含 model.json）
 LIVE2D_MODEL_ROOT = str(Path(PROJECT_ROOT) / os.getenv("LIVE2D_MODEL_ROOT", "live2d"))
@@ -154,6 +184,7 @@ EDITABLE_KEYS = {
     "MEMORY_FACT_DECAY_DAYS": ("事实衰减天数", "int", MEMORY_FACT_DECAY_DAYS),
     "MEMORY_DEBUG": ("调试输出", "bool", MEMORY_DEBUG),
     "BAIDU_API_KEY": ("百度搜索 Key", "str", BAIDU_API_KEY),
+    "LIVE2D_BODY_MODE": ("Live2D 情绪表达模式 (B/C)", "str", LIVE2D_BODY_MODE),
 }
 
 
@@ -161,11 +192,25 @@ def get_config_snapshot() -> list:
     """返回后台管理可读的配置列表"""
     result = []
     for key, (desc, dtype, _default) in EDITABLE_KEYS.items():
+        v = _current_value(key, dtype)
+        # 未在 .env 显式配置时,显示模块默认值(便于后台看到当前生效值)
+        if v is None:
+            try:
+                if dtype == "str":
+                    v = str(_default)
+                elif dtype == "int":
+                    v = int(_default)
+                elif dtype == "float":
+                    v = float(_default)
+                elif dtype == "bool":
+                    v = bool(_default)
+            except Exception:
+                v = None
         result.append({
             "key": key,
             "desc": desc,
             "type": dtype,
-            "value": _current_value(key, dtype),
+            "value": v,
         })
     return result
 

@@ -270,6 +270,37 @@
       if (!m || !m.live2DModel) return;
       try { m.live2DModel.setParamFloat("PARAM_MOUTH_OPEN_Y", v, 1); } catch (e) {}
     },
+    // 通用参数驱动：写入任意 PARAM_*（A 状态层 / 细粒度控制用）。
+    // weight: 0~1 覆盖权重（越大越覆盖模型动画给出的值）。返回是否写入成功。
+    setParam: function (id, v, weight) {
+      var m = liveModel();
+      if (!m || !m.live2DModel) return false;
+      try { m.live2DModel.setParamFloat(id, v, weight == null ? 1 : weight); return true; } catch (e) {}
+      return false;
+    },
+    // 批量参数驱动（每帧由状态层调用）：写入目标值，返回成功写入的计数。
+    setParams: function (map, weight) {
+      var m = liveModel();
+      if (!m || !m.live2DModel) return 0;
+      var n = 0;
+      try {
+        var w = weight == null ? 1 : weight;
+        for (var id in map) {
+          if (Object.prototype.hasOwnProperty.call(map, id)) {
+            m.live2DModel.setParamFloat(id, map[id], w);
+            n++;
+          }
+        }
+      } catch (e) {}
+      return n;
+    },
+    // 读取当前参数值(供"释放给A前"对齐B与A的当前值,避免抽手时跳变)
+    getParam: function (id) {
+      var m = liveModel();
+      if (!m || !m.live2DModel) return 0;
+      try { return m.live2DModel.getParamFloat(id) || 0; } catch (e) {}
+      return 0;
+    },
     // 视线跟随：直接驱动模型看向鼠标方向（不依赖运行时内部 rAF 链路）
     setDrag: function (dx, dy) {
       var m = liveModel();
@@ -1102,6 +1133,267 @@
     });
   }
 
+
+  // ============================================================
+  // A 状态层：情绪持续驱动身体参数（“情绪挂在脸上”，不是一次性 .exp 快照）
+  // ------------------------------------------------------------
+  // 设计：
+  //  - 情绪(primary/valence/intensity) → 一组 PARAM 目标值（脸颊/眼眶/眉毛/嘴形/头部姿态）。
+  //  - 独立 rAF 循环 bodyLoop 每帧把“当前值”向“目标值”**平滑插值(ease)**，
+  //    再低权重(setParams weight≈0.35)写入，与模型动画/口型/视线叠加而非打架。
+  //  - 情绪在两次回复之间**持续保持**（除非被新 behavior 或超时重置），
+  //    这正是“状态层”区别于“一次性动作”的关键：会话中情绪一直挂在脸上。
+  //  - 只驱动 shape/orientation 参数，刻意避开 PARAM_MOUTH_OPEN_Y(口型通道)、
+  //    PARAM_EYE_BALL_*(视线通道)、PARAM_BREATH(呼吸)，避免互相覆盖。
+  // ============================================================
+  var BODY_EASE = 0.08;      // 插值系数：越大过渡越快（每帧朝向目标靠近的比例）
+  var BODY_HOLD_MS = 25000;  // 无新行为时情绪保持多久后平滑回落默认（25s）
+  // 情绪主名 → 身体参数目标值。未列出的情绪回退默认脸。
+  // PARAM 值域参考：EYE_L/R_OPEN 0~1(+)，BROW_FORM 0~1，BROW_ANGLE -1..1，
+  // CHEEK/TEAR 0~1，MOUTH_FORM_01/02 0~1，ANGLE_X/Y/Z -1..1。
+  var BODY_TARGETS = {
+    happy: {
+      "PARAM_EYE_L_OPEN": 1.15, "PARAM_EYE_R_OPEN": 1.15,
+      "PARAM_BROW_L_FORM": 0.20, "PARAM_BROW_R_FORM": 0.22,
+      "PARAM_CHEEK": 0.25, "PARAM_MOUTH_FORM_01": 0.25,
+      "PARAM_ANGLE_Z": 0.04,
+    },
+    excited: {
+      "PARAM_EYE_L_OPEN": 1.35, "PARAM_EYE_R_OPEN": 1.35,
+      "PARAM_EYE_SCALE": 1.15, "PARAM_BROW_L_FORM": 0.35, "PARAM_BROW_R_FORM": 0.38,
+      "PARAM_CHEEK": 0.35, "PARAM_MOUTH_FORM_01": 0.4, "PARAM_MOUTH_FORM_02": 0.1,
+      "PARAM_ANGLE_Z": 0.06,
+    },
+    sad: {
+      "PARAM_EYE_L_OPEN": 0.70, "PARAM_EYE_R_OPEN": 0.70,
+      "PARAM_BROW_L_FORM": -0.2, "PARAM_BROW_R_FORM": -0.2,
+      "PARAM_BROW_L_ANGLE": 0.5, "PARAM_BROW_R_ANGLE": 0.5,
+      "PARAM_TEAR": 0.6, "PARAM_MOUTH_FORM_01": 0.12,
+      "PARAM_ANGLE_X": 0.05, "PARAM_ANGLE_Y": -0.05,
+    },
+    angry: {
+      "PARAM_EYE_L_OPEN": 0.85, "PARAM_EYE_R_OPEN": 0.80,
+      "PARAM_BROW_L_ANGLE": -0.6, "PARAM_BROW_R_ANGLE": -0.6,
+      "PARAM_BROW_L_FORM": -0.15, "PARAM_BROW_R_FORM": -0.15,
+      "PARAM_MOUTH_FORM_01": 0.45, "PARAM_ANGLE_Z": 0.05,
+    },
+    surprised: {
+      "PARAM_EYE_L_OPEN": 1.5, "PARAM_EYE_R_OPEN": 1.5,
+      "PARAM_EYE_SCALE": 1.2, "PARAM_BROW_L_FORM": 0.6, "PARAM_BROW_R_FORM": 0.6,
+      "PARAM_MOUTH_FORM_01": 0.55, "PARAM_MOUTH_FORM_02": -0.2,
+      "PARAM_ANGLE_Y": 0.06,
+    },
+    shy: {
+      "PARAM_EYE_L_OPEN": 0.85, "PARAM_EYE_R_OPEN": 0.85,
+      "PARAM_BROW_L_FORM": 0.12, "PARAM_BROW_R_FORM": 0.12,
+      "PARAM_CHEEK": 1.0, "PARAM_CHEEK2": 0.6,
+      "PARAM_MOUTH_FORM_01": 0.2, "PARAM_ANGLE_Z": 0.08, "PARAM_ANGLE_X": 0.06,
+    },
+    tired: {
+      "PARAM_EYE_L_OPEN": 0.45, "PARAM_EYE_R_OPEN": 0.45,
+      "PARAM_BROW_L_FORM": -0.1, "PARAM_BROW_R_FORM": -0.1,
+      "PARAM_MOUTH_FORM_01": 0.1, "PARAM_ANGLE_Z": 0.08, "PARAM_ANGLE_X": 0.08,
+    },
+  };
+  var BODY_DEFAULT = {
+    "PARAM_EYE_L_OPEN": 1.0, "PARAM_EYE_R_OPEN": 1.0,
+    "PARAM_EYE_SCALE": 1.0, "PARAM_BROW_L_FORM": 0, "PARAM_BROW_R_FORM": 0,
+    "PARAM_BROW_L_ANGLE": 0, "PARAM_BROW_R_ANGLE": 0,
+    "PARAM_CHEEK": 0, "PARAM_CHEEK2": 0, "PARAM_TEAR": 0,
+    "PARAM_MOUTH_FORM_01": 0, "PARAM_MOUTH_FORM_02": 0,
+    "PARAM_ANGLE_X": 0, "PARAM_ANGLE_Y": 0, "PARAM_ANGLE_Z": 0,
+  };
+  // 情绪名归一化（中文 primary → 内部 key；未命中回退 null）
+  var BODY_KEY = {
+    "开心": "happy", "高兴": "happy", "愉悦": "happy", "兴奋": "excited",
+    "难过": "sad", "伤心": "sad", "沮丧": "sad",
+    "生气": "angry", "愤怒": "angry",
+    "惊讶": "surprised", "焦虑": "surprised",
+    "害羞": "shy", "撒娇": "shy",
+    "疲惫": "tired", "困": "tired",
+  };
+  var body = {
+    primary: "",       // 当前情绪主名
+    intensity: 0.5,    // 情绪强度 0~1（调制次向导数的权重）
+    ts: 0,             // 上次收到行为/情绪的时间戳
+    cur: {},           // 当前各参数插值后的值（初始为默认脸）
+    targets: {},       // 目标值（初始为默认脸）
+    lastKey: "",
+    raf: 0,
+    active: false,
+    // ---- 模式二:释放给 A ----
+    releasing: false,  // 是否处于"向A释放"的过渡期(B 每帧压 A 但仍平滑收手)
+    released: false,   // 是否已完全放手(B 跳过写入,每帧完全还给 A)
+    releaseStart: 0,   // 开始"释放过渡"的时间戳(用于卡 A 待机间隔)
+    releaseA: {},      // 释放期间对齐的 A 当前值(避免抽手跳变)
+  };
+  function bodyDefaultTargets() {
+    var t = {};
+    for (var k in BODY_DEFAULT) t[k] = BODY_DEFAULT[k];
+    return t;
+  }
+  function bodyInit() {
+    body.cur = bodyDefaultTargets();
+    body.targets = bodyDefaultTargets();
+  }
+  // 把情绪(中文主名+强度) → 目标参数表
+  function bodyTargetsForKey(key, intensity) {
+    var t = bodyDefaultTargets();
+    var tgt = BODY_TARGETS[key];
+    if (!tgt) return t;
+    var it = (typeof intensity === "number" && isFinite(intensity)) ? Math.max(0, Math.min(1, intensity)) : 0.5;
+    // 强度调制：把目标值往中间值(默认)拉——强度低时情绪表现更淡
+    for (var id in BODY_TARGETS) { /* noop guard */ }
+    for (var p in tgt) {
+      var def = BODY_DEFAULT[p] || 0;
+      if (Object.prototype.hasOwnProperty.call(tgt, p)) {
+        t[p] = def + (tgt[p] - def) * (0.4 + 0.6 * it);
+      }
+    }
+    return t;
+  }
+  // 设置情绪状态(供 applyBehavior/onRoleTalk 调用)。intensity 默认 0.5。
+  function bodySetEmotion(primary, intensity) {
+    var key = BODY_KEY[primary] || "";
+    body.primary = primary || "";
+    body.intensity = (typeof intensity === "number" && isFinite(intensity)) ? intensity : 0.5;
+    body.ts = Date.now();
+    // 首次设置:先初始化 cur/targets 为默认,再设目标(顺序必须:init 在前,否则被覆盖)
+    if (!body.active) {
+      bodyInit();
+      startBodyLoop();
+    }
+    // 若正处于"释放给A"过渡,收到新情绪 → 立刻取消释放,恢复压写(从A当前值平滑去新情绪)
+    if (body.released || body.releasing) {
+      body.releasing = false;
+      body.released = false;
+      // 从 A 当前值开始插值,避免从"已还原的A值"瞬间跳到新情绪
+      body.cur = bodyCaptureA();
+    }
+    if (key !== body.lastKey) {
+      body.lastKey = key;
+      body.targets = key ? bodyTargetsForKey(key, body.intensity) : bodyDefaultTargets();
+    } else {
+      // 同一情绪、强度变化 → 直接重算目标（不打断已进行的插值平滑）
+      if (key) body.targets = bodyTargetsForKey(key, body.intensity);
+    }
+  }
+  // 重置回默认脸（新会话/超时等）
+  // 读取 A(原生)当前各参数值,用于"释放给A"时对齐,避免抽手瞬间跳变。
+  function bodyCaptureA() {
+    var a = {};
+    for (var p in BODY_DEFAULT) {
+      if (Object.prototype.hasOwnProperty.call(BODY_DEFAULT, p)) a[p] = renderer.getParam(p);
+    }
+    return a;
+  }
+  // 开始"释放给A"过渡:记录 A 当前值;等 A 进入待机空档后再平滑收手
+  function bodyReset() {
+    body.lastKey = "";
+    body.primary = "";
+    if (!body.releasing && !body.released) {
+      body.releaseA = bodyCaptureA();
+      body.releasing = true;
+      body.releaseStart = Date.now();
+    }
+  }
+  // 每帧:由运行时 update 钩子在"参数算完之后"叠写情绪参数(weight=1,不被覆盖)
+  // 模式二:情绪有效时压写;情绪超时后进入"释放过渡",平滑对齐 A 当前值,
+  // 收敛后完全放手(跳过写入,每帧还给 A)。释放时机卡 A 的待机空档(不开口时)。
+  function bodyApplyFrame() {
+    var m = liveModel();
+    if (!m || !m.live2DModel) return;
+
+    // 情况1:已完全放手 → 不写,每帧完全还给 A
+    if (body.released) return;
+
+    // 情况2:情绪存在且未超时 → 正常压写
+    var timedOut = body.lastKey && (Date.now() - body.ts > BODY_HOLD_MS);
+    if (!timedOut && !body.releasing) {
+      var out = {};
+      for (var p in body.targets) {
+        if (!Object.prototype.hasOwnProperty.call(body.targets, p)) continue;
+        var cur = (typeof body.cur[p] === "number") ? body.cur[p] : (BODY_DEFAULT[p] || 0);
+        var tgt = body.targets[p];
+        var nv = cur + (tgt - cur) * BODY_EASE;
+        if (Math.abs(nv - tgt) < 0.003) nv = tgt;
+        body.cur[p] = nv;
+        out[p] = nv;
+      }
+      renderer.setParams(out, 1);
+      return;
+    }
+
+    // 情况3:需要释放(超时)但还没开始 → 启动释放过渡(等 A 待机空档)
+    if (timedOut && !body.releasing && !body.released) {
+      bodyReset();
+    }
+
+    // 情况4:释放过渡中。
+    //   卡 A 待机空档:仅当 A 不开口(lipT.active=false,无大幅动作)才真正收手,
+    //   避免在说话/大动作中途抽手造成跳变。
+    if (body.releasing) {
+      var nearIdle = !lipT.active;
+      if (nearIdle) {
+        // 把 B 的当前值平滑逼近 A 的当前值(releaseA);收敛后完全放手
+        var out2 = {};
+        var done = true;
+        for (var p2 in BODY_DEFAULT) {
+          if (!Object.prototype.hasOwnProperty.call(BODY_DEFAULT, p2)) continue;
+          var av = (typeof body.releaseA[p2] === "number") ? body.releaseA[p2] : (BODY_DEFAULT[p2] || 0);
+          var c2 = (typeof body.cur[p2] === "number") ? body.cur[p2] : (BODY_DEFAULT[p2] || 0);
+          var n2 = c2 + (av - c2) * BODY_EASE;
+          if (Math.abs(n2 - av) < 0.003) n2 = av; else done = false;
+          body.cur[p2] = n2;
+          out2[p2] = n2;
+        }
+        renderer.setParams(out2, 1);
+        if (done) { body.released = true; body.releasing = false; }
+      } else {
+        // A 还在开口/大动作中 → 本帧继续维持 B 当前值(不抽手),等下次空档
+        renderer.setParams(body.cur, 1);
+      }
+    }
+  }
+  // 把叠写钩子挂到运行时每帧 update 之末。
+  // 运行时主循环每帧 e.update() 内部调用 this.live2DModel.update() 重算参数,
+  // 我在其之后补写 → 情绪参数每帧都被压上去,不会被动作/物理/呼吸覆盖。
+  // 与视线跟随的 patchManagerDrag 同思路:改运行时收尾,而不是独立 rAF 抢参数。
+  function patchBodyUpdate() {
+    try {
+      var m = liveModel();
+      if (!m || !m.live2DModel || m.live2DModel.__bodyPatched) return;
+      var target = m.live2DModel;
+      // 需要每个模型实例都 patch;这里针对当前 getModel(0)
+      var origUpdate = target.update;
+      if (typeof origUpdate !== "function") return;
+      target.update = function () {
+        try { if (origUpdate) return origUpdate.apply(this, arguments); }
+        catch (e) {}
+        finally { try { bodyApplyFrame(); } catch (e2) {} }
+      };
+      target.__bodyPatched = true;
+    } catch (e) {}
+  }
+  function startBodyLoop() {
+    if (body.active) return;
+    body.active = true;
+    // 模型就绪后立即 patch(未就绪则等就绪后再试)
+    whenModelReady(function () { patchBodyUpdate(); bodyApplyFrame(); }, function () {}, 40);
+  }
+  // 暴露后门
+  window.Live2D.body = {
+    setEmotion: bodySetEmotion,
+    reset: function () { bodyReset(); },
+    state: function () {
+      // 未初始化(从未设情绪)时, targets 为空对象 → 返回默认脸,避免调用方拿到空 {}
+      var t = (body.targets && Object.keys(body.targets).length) ? body.targets : bodyDefaultTargets();
+      return {
+        primary: body.primary, intensity: body.intensity, lastKey: body.lastKey, targets: t,
+        releasing: body.releasing, released: body.released,   // 模式二:释放状态(可观察)
+      };
+    },
+  };
   // 角色开口说话：优先窗口A下发的 behavior（表情/口型/动作），否则前端猜（+0 契约 §3.2）
   // behavior: { emotion?, expression?, mouth_open?, actions?[] }
   function applyBehavior(behavior, text) {
@@ -1109,6 +1401,12 @@
     var b = behavior || {};
     var groups = motionGroups();
     var bEmotion = (b.emotion && b.emotion.primary) || "";
+
+    // 0) A 状态层：把情绪写入 body 状态，持续驱动脸/体态参数（并保持到下一次行为）
+    if (bEmotion) {
+      var bIntensity = (b.emotion && typeof b.emotion.intensity === "number") ? b.emotion.intensity : 0.5;
+      bodySetEmotion(bEmotion, bIntensity);
+    }
 
     // 1) 表情：behavior.expression 是 exp.json 名（或语义名），用安全解析（跨模型/别名兜底）
     if (b.expression) {

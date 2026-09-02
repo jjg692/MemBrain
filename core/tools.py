@@ -434,6 +434,17 @@ TOOL_REGISTRY = {
 if _ASSISTANT_AVAILABLE:
     TOOL_REGISTRY.update(ASSISTANT_TOOL_REGISTRY)
 
+# Live2D 身体表达（B 方案）：LLM 主动指挥身体。
+# 仅在 LIVE2D_BODY_MODE=B 时注册 express_body 工具；C 方案无需工具（由内核自动映射）。
+try:
+    from core.config import LIVE2D_BODY_MODE
+    from core.body_tools import EXPRESS_BODY_TOOL, EXPRESS_BODY_REGISTRY
+    if LIVE2D_BODY_MODE == "B":
+        ALL_TOOLS = ALL_TOOLS + [EXPRESS_BODY_TOOL]
+        TOOL_REGISTRY.update(EXPRESS_BODY_REGISTRY)
+except Exception:
+    pass
+
 # MCP 客户端骨架：动态发现并注册外部工具（游戏 MCP 等）。
 # 无 MCP 配置或 server 启动失败时静默降级，不影响既有功能。
 try:
