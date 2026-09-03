@@ -87,7 +87,7 @@
     <div class="card">
       <h3>角色列表</h3>
       <table id="rolesTable">
-        <thead><tr><th>role_id</th><th>显示名</th><th>默认</th><th>渲染</th><th>头像</th><th>Live2D 模型</th><th>操作</th></tr></thead>
+        <thead><tr><th>role_id</th><th>显示名</th><th>默认</th><th>头像</th><th>Live2D 模型</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -108,7 +108,7 @@
   <div class="panel active" id="panel-render">
     <div class="card">
       <h3>渲染角色管理</h3>
-      <p class="hint" style="margin-bottom:12px">开启的角色会在桌面宠物中各自打开独立窗口渲染。默认角色（⭐ 看板娘）始终渲染且不可关闭，其余角色通过下方开关控制。</p>
+      <p class="hint" style="margin-bottom:12px">开启的角色会在桌面宠物中各自打开独立窗口渲染。默认角色始终渲染且不可关闭，其余角色通过下方开关控制。</p>
       <table id="renderTable">
         <thead><tr><th>角色</th><th>默认</th><th>渲染状态</th><th>开关</th></tr></thead>
         <tbody></tbody>
@@ -281,13 +281,6 @@ async function loadRoles(){
       <td>${esc(r.role_id)}</td>
       <td>${esc(r.display_name)}</td>
       <td>${r.default?'⭐ 默认':'<button class="btn btn-gray" onclick="setDefault(\''+r.role_id+'\')">设为默认</button>'}</td>
-      <td>
-        ${r.default
-          ?'<span style="color:#07c160">● 看板娘</span><div style="font-size:11px;color:#999">默认角色恒渲染</div>'
-          :(r.rendered
-            ?'<button class="btn btn-red" onclick="setRender(\''+r.role_id+'\',false)">关闭渲染</button>'
-            :'<button class="btn btn-green" onclick="setRender(\''+r.role_id+'\',true)">开放渲染</button>')}
-      </td>
       <td>${r.avatar?'<img src="'+r.avatar_url+'" style="width:30px;height:30px;border-radius:4px" onerror="this.style.display=\'none\'">':'无'}</td>
       <td style="min-width:220px">
         <div style="font-size:12px;color:#555;word-break:break-all" id="l2dpath_${r.role_id}">${esc(r.live2d_model||'')||'<span style="color:#bbb">（未设置 · 用全局默认）</span>'}</div>
@@ -339,7 +332,7 @@ async function loadRenderRoles(){
     const tr=document.createElement('tr');
     tr.innerHTML=`
       <td style="font-weight:600">${esc(r.display_name)}<div style="font-weight:400;color:#999;font-size:12px">${esc(r.role_id)}</div></td>
-      <td>${isDefault?'⭐ 默认（看板娘）':'—'}</td>
+      <td>${isDefault?'⭐ 默认':'—'}</td>
       <td>${on?'<span style="color:#07c160;font-weight:600">● 渲染中</span>':'<span style="color:#999">○ 未渲染</span>'}</td>
       <td>
         ${isDefault
