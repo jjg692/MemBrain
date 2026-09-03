@@ -164,7 +164,7 @@ class RoleRenderMgr:
             for rid, d in wanted.items():
                 if rid not in open_ids:
                     try:
-                        win = self._spawn(rid, d.get("display_name", rid))
+                        win = self._spawn(rid, d)
                         win.show()
                         self._wins.append(win)
                     except Exception:
@@ -301,11 +301,12 @@ def build_windows():
             def cropToChar(self, fx, fy):
                 # 把窗口裁剪到角色实际渲染尺寸（fx,fy = 角色宽/高占窗口比例），
                 # 使窗口=角色轮廓、无外部多余一圈；并让角色底部贴任务栏、保持相对右下角。
+                # 最小尺寸限制：防止异常情况下窗口被裁到几乎消失（60x80 太极端）。
                 try:
                     cg = self.win.geometry()
                     sw, sh = _screen_size()
-                    new_w = max(60, int(cg.width() * fx))
-                    new_h = max(80, int(cg.height() * fy))
+                    new_w = max(110, int(cg.width() * fx))
+                    new_h = max(170, int(cg.height() * fy))
                     # 保持右下角偏移：右距维持当前，底部贴任务栏（工作区底-新高）
                     right_gap = sw - (cg.x() + cg.width())
                     new_x = max(0, sw - new_w - right_gap)
@@ -479,13 +480,13 @@ def build_windows():
     # ---- 需求2：每个渲染角色一个独立透明宠物窗 ----
     # 默认角色（看板娘）由 main_win 承担（/live2d?petmode=1 自动解析默认角色）；
     # 其它开放渲染的角色由 RoleRenderMgr 按后台开关动态增开 / 关闭。
+    # 各角色窗口用统一的 PET_W/PET_H 尺寸与默认模型缩放创建；角色的窗口大小
+    # 不做运行时裁剪/缩放（L2Dwidget 固定画布 resize 会变形/点击错位）。
     _role_counter = [0]
-    def spawn_role_win(role_id, display_name):
-        w = make_view(
-            HOST_URL + "/live2d?petmode=1&role_id=" + role_id,
-            PET_W, PET_H, True,
-            "MemBrain 宠物 · " + (display_name or role_id),
-        )
+    def spawn_role_win(role_id, d=None):
+        d = d or {}
+        url = HOST_URL + "/live2d?petmode=1&role_id=" + role_id
+        w = make_view(url, PET_W, PET_H, True, "MemBrain 宠物 · " + (d.get("display_name") or role_id))
         w._is_pet = True
         w._role_id = role_id
         sw2, sh2 = _screen_size()

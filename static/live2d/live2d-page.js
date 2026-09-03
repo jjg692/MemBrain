@@ -742,22 +742,14 @@
     // 所以 wheel 监听绑到 window 上，任意位置滚轮都能缩放。
     window.addEventListener("wheel", function (e) {
       e.preventDefault();
+      // petmode（桌面宠物透明窗）：不做滚轮缩放窗口——L2Dwidget 用固定像素画布、
+      // 不响应 resize，运行时改窗口会被 CSS 拉伸导致角色变形、点击错位。
+      // 角色大小由后台「渲染角色管理」配置的窗口尺寸/模型缩放决定。
+      if (state.petmode) return;
       var factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-      if (state.petmode) {
-        // 方案A：缩放整个窗口（保持长宽比），画布/模型随窗口等比例缩放，
-        // 窗口永远贴合模型，无多余透明区。
-        var cw = window.innerWidth, ch = window.innerHeight;
-        var ratio = cw / ch;           // 记住当前窗口宽高比
-        var nh = ch * factor;
-        var nw = nh * ratio;           // 保持同比例放大/缩小窗口
-        resizeHostWindow(nw, nh);
-        // 记下该角色新尺寸，重启后恢复；滚轮后重贴一次角色（防极端拉伸未完全贴合）
-        setTimeout(function () { recordPetSize(); schedulePetCrop(); }, 350);
-      } else {
-        live2dT.s = Math.min(5, Math.max(0.2, live2dT.s * factor));
-        applyT();
-        bus.emit("scale", { scale: live2dT.s });
-      }
+      live2dT.s = Math.min(5, Math.max(0.2, live2dT.s * factor));
+      applyT();
+      bus.emit("scale", { scale: live2dT.s });
     }, { passive: false });
   }
 
@@ -1676,10 +1668,9 @@
         initEyeTrack();
         // 待机表现：长时间无交互时宠物自然"活着"（动作 + 表情微变）
         startIdle();
-        // 窗口贴合角色（需求1）：先恢复上次记住的窗口尺寸（避免闪烁），
-        // 再做收敛式裁剪——每次量角色 bbox 后把窗口收紧到角色大小，重复直到贴合。
-        whenPetHostReady(restoreSavedPetSize);
-        schedulePetCrop();
+        // 不做运行时自动裁剪/恢复窗口——L2Dwidget 用固定像素画布、不响应 resize，
+        // 运行时改窗口会被 CSS 拉伸导致角色变形、点击错位。角色在窗口内的大小
+        // 由各渲染角色按统一 PET_W/PET_H 窗口 + 默认模型缩放承载（后台只控制是否渲染）。
       }
       else { hideStatus(); }
 
@@ -1821,18 +1812,39 @@
       });
     }, 400);
   }
+  // ============================================================
+  // 窗口贴合角色（收敛式裁剪）
+  // ------------------------------------------------------------
+  // 目标：让宠物窗贴合角色实际渲染尺寸，去掉左右各约 1/4 的空边。
+  //
+  // 关键约束（为什么不能"比例收敛到 0.96"）：
+  //   petmode 下 canvas 是 100vw/100vh 跟随窗口拉伸，L2Dwidget 的模型
+  //   也随窗口等比例缩放。因此无论把窗口缩小多少，角色 bbox 占窗口的
+  //   比例(fx, fy) 几乎不变——若按 "fx<0.96 就继续裁" 的死循环收敛，
+  //   会无限把窗口缩到最小(60x80)直到角色几乎消失。
+  //
+  // 正确做法：裁一次到位（窗口= 角色当前 bbox 的宽/高×比例），随即停止。
+  //   窗口贴合角色后，用户若觉得角色太小，可用滚轮整窗等比放大
+  //   （petmode 滚轮 → resizeHostWindow），窗口仍贴合角色且更大。
+  // ============================================================
+  var PET_CROP_MIN_W = 110;   // 最小裁剪宽度，防止异常缩到几乎消失
+  var PET_CROP_MIN_H = 170;   // 最小裁剪高度
   function doPetCropStep() {
-    if (petCropTries >= 6) { recordPetSize(); return; }
+    if (petCropTries >= 3) { recordPetSize(); return; }
     petCropTries++;
     if (!window.Live2DHost || !window.Live2DHost.cropToChar) return;
     measurePetBbox(function (fx, fy) {
       try {
         if (fx == null) { recordPetSize(); return; }
-        // 已足够贴合则收尾
+        // 已经够贴合（角色占满绝大部分），无需再裁
         if (fx >= 0.96 && fy >= 0.96) { recordPetSize(); return; }
-        window.Live2DHost.cropToChar(fx, fy);
-        // 等 Qt 完成 resize + 页面重排后再量下一次（收敛）
-        setTimeout(doPetCropStep, 500);
+        // 一次性裁剪到位后即停，不再按比例循环收敛（避免无限缩到最小）
+        window.Live2DHost.cropToChar(
+          Math.max(fx, PET_CROP_MIN_W / window.innerWidth),
+          Math.max(fy, PET_CROP_MIN_H / window.innerHeight)
+        );
+        // 短延迟后记录尺寸（让 Qt 完成 resize 后再存，数值稳定）
+        setTimeout(recordPetSize, 400);
       } catch (e) { recordPetSize(); }
     });
   }

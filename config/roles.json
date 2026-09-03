@@ -7,7 +7,8 @@
       "avatar": "kasumi.png",
       "default": true,
       "description": "元气满满的天才吉他手，Poppin'Party 的主唱与吉他手。",
-      "live2d_model": "Toyama Kasumi/001_live_r_2023"
+      "live2d_model": "Toyama Kasumi/001_live_event_295_ur",
+      "render_enabled": true
     },
     {
       "role_id": "kokoro",
@@ -16,7 +17,8 @@
       "avatar": "kokoro.png",
       "default": false,
       "description": "天真烂漫、充满想象力的大小姐，Hello, Happy World! 的主唱。",
-      "live2d_model": "Tsurumaki Kokoro/011_live_event_64_sr"
+      "live2d_model": "Tsurumaki Kokoro/011_live_event_64_sr",
+      "render_enabled": false
     }
   ]
 }
