@@ -28,6 +28,14 @@
 - **改模型自动生效（代替手动重启宠物窗）**：`live2d-page.js` 每 3 秒轮询 `/api/contacts`，检测到当前角色 `live2d_model` 变化后**整页刷新**自动加载新模型。⚠️ 必须整页刷新而非页内 `loadModel`：Cubism2 运行时在同一页面二次 `init` 会污染旧 WebGL 上下文（`object does not belong to this context`），画面会崩成三原色。
 - **默认宠物用户山香澄**（`roles.json` 中 `default:true` 且已配置其模型 `Toyama Kasumi/001_live_r_2023`）。
 
+### 星露谷 MCP 扩展（可选，默认关闭）
+
+新增可选的「星露谷物语 MCP」扩展，让宠物感知并参与星露谷游戏世界（读游戏状态/进游戏当同伴/记忆反写/多 agent 小队）。**默认关闭**（`STARDEW_MCP_ENABLED=false`），不影响不玩星露谷的用户；想启用只需在后台或 `.env` 打开开关。
+
+- **引用的 git 仓库**：[amarisaster/StardewValley-MCP](https://github.com/amarisaster/StardewValley-MCP)（MIT 协议，共 25 个 `mcp_stardew_*` 工具）
+- 本地已含该仓库源码副本：`stardew/StardewValley-MCP/`（含 `mcp-server/` Node.js MCP server 与 `smapi-mod/` SMAPI 模组）
+- 完整说明见 `stardew/README.md`（架构 / 启用步骤 / 依赖环境）
+
 ### 其他
 
 - 移除遗留的调试临时文件（`_m1.png` / `_m2.png` / `_m3.png` / `_m1.log.out`）。
