@@ -75,21 +75,31 @@ def _fake_requests(monkeypatch, responses):
 
 
 def test_search_web_weather_success(monkeypatch):
-    """天气查询命中 Open-Meteo：返回天气描述，不回退到通用源。"""
+    """天气查询命中 Open-Meteo：返回天气描述，不回退到通用源。
+
+    城市坐标直接来自内置 _CITY_MAP（精确坐标，不再调外部地理编码 API）。
+    """
     from core.tools import search_web, _geocode_city
-    monkeypatch.setattr("core.tools._CITY_MAP", {"北京": "beijing"})
+    monkeypatch.setattr("core.tools._CITY_MAP", {"北京": "39.9042,116.4074"})
     _fake_requests(monkeypatch, {
-        "https://geocoding-api.open-meteo.com": {"results": [{"latitude": 39.9, "longitude": 116.4}]},
         "https://api.open-meteo.com": {
-            "current_weather": {"temperature": 24.5, "weathercode": 0},
+            "current_weather": {"temperature": 24.5, "weathercode": 0, "time": "2026-01-01T09:00"},
             "hourly": {"time": ["2026-01-01T09:00", "2026-01-01T12:00", "2026-01-01T15:00"],
                        "temperature_2m": [20, 24, 28],
                        "precipitation": [0, 0, 0.1]},
+            "daily": {"time": ["2026-01-01", "2026-01-02", "2026-01-03"],
+                      "weathercode": [0, 1, 51],
+                      "temperature_2m_max": [28, 26, 22],
+                      "temperature_2m_min": [18, 17, 16],
+                      "precipitation_probability_max": [0, 10, 90]},
         },
     })
     result = search_web("北京天气怎么样")
     assert "北京" in result
     assert "24.5" in result or "晴" in result
+    # 新增：应包含"今天 / 明天"的每日预报
+    assert "今天" in result
+    assert "明天" in result
 
 
 def test_search_web_empty_query():

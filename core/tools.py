@@ -38,12 +38,23 @@ WIKI_HINTS = [
     "定义", "由来", "含义", "哪个", "著名", "介绍", "百科",
 ]
 
-# 中国大陆常见城市（用于天气本地化兜底，可扩充）
+# 中国大陆常见城市 -> 精确坐标（lat,lon）。**直接存坐标**，绕过 Open-Meteo
+# 地理编码 API 对中文地名的不可靠解析（例：它把"长沙"错匹配到重庆边界的同名地，
+# 导致天气显示的是别处数据）。用精确坐标调预报接口即稳定。
 _CITY_MAP = {
-    "北京": "beijing", "上海": "shanghai", "广州": "guangzhou",
-    "深圳": "shenzhen", "杭州": "hangzhou", "成都": "chengdu",
-    "武汉": "wuhan", "西安": "xian", "南京": "nanjing", "重庆": "chongqing",
-    "天津": "tianjin", "苏州": "suzhou", "长沙": "changsha",
+    "北京": "39.9042,116.4074",
+    "上海": "31.2304,121.4737",
+    "广州": "23.1291,113.2644",
+    "深圳": "22.5431,114.0579",
+    "杭州": "30.2741,120.1551",
+    "成都": "30.5728,104.0668",
+    "武汉": "30.5928,114.3055",
+    "西安": "34.3416,108.9398",
+    "南京": "32.0603,118.7969",
+    "重庆": "29.5630,106.5516",
+    "天津": "39.3434,117.3616",
+    "苏州": "31.2989,120.5853",
+    "长沙": "28.2282,112.9388",
 }
 
 
@@ -153,24 +164,28 @@ def _ddg_search(query: str, limit: int = 5) -> str:
 # ===================== 天气源（Open-Meteo） =====================
 
 def _geocode_city(city: str) -> Optional[str]:
-    """地理编码：优先内置城市表，其次 Open-Meteo geocoding API，返回 lat,lon"""
+    """由内置城市表返回精确坐标 "lat,lon"，不调外部地理编码 API。
+
+    之前依赖 Open-Meteo geocoding API 按中文名解析，但该接口对多字同名
+    城市匹配不可靠（如"长沙"被匹配到重庆边界），导致天气数据错误。改为
+    内置坐标表直接命中，稳定且无外部依赖。
+    """
     key = city.strip()
-    en = _CITY_MAP.get(key)
-    if en:
-        r = requests.get(
-            "https://geocoding-api.open-meteo.com/v1/search",
-            params={"name": key, "count": 1, "language": "zh", "format": "json"},
-            timeout=_TIMEOUT,
-        )
-        data = r.json()
-        res = (data.get("results") or [])
-        if res:
-            return f"{res[0]['latitude']},{res[0]['longitude']}"
+    coord = _CITY_MAP.get(key)
+    if coord:
+        return coord if "," in coord else None
     return None
 
 
 def _weather_search(query: str) -> str:
-    """Open-Meteo 天气：从 query 提取城市，返回实时与预报"""
+    """Open-Meteo 天气：从 query 提取城市（内置精确坐标），返回实时 + 今/明天预报。
+
+    改进（相比旧版）：
+    - 城市坐标来自内置 _CITY_MAP（精确坐标），不再调用不可靠的 Open-Meteo
+      geocoding 中文解析，修复"长沙查到重庆"等错误。
+    - 用 daily 接口取今天/明天的**最高/最低温 + 降水概率**，按天组织输出；
+      用户问"明天"时能给出对应日期的预报，而非旧版"当前时刻起的前8个3小时间隔"。
+    """
     import re
     # 提取城市：内置表直接命中，否则取第一个疑似城市词（忽略常用天气词）
     city = None
@@ -184,7 +199,7 @@ def _weather_search(query: str) -> str:
                 city = c
                 break
     if not city:
-        # 兜底：尝试把"XX天气"里的 XX 当城市名
+        # 兜底：尝试把"XX天气"里的 XX 当城市名（可能不在内置表 → 下面坐标查不到则诚实返回）
         m = re.match(r"^([一-龥]{2,4})(?:今天|明天|后天|的)?天气", query)
         if m:
             city = m.group(1)
@@ -192,16 +207,17 @@ def _weather_search(query: str) -> str:
         return ""
     coords = _geocode_city(city)
     if not coords:
-        return ""
+        return f"（暂不支持该城市）暂时只支持部分中国大陆城市天气，请换个常见城市试试。"
     lat, lon = coords.split(",")
     r = requests.get(
         "https://api.open-meteo.com/v1/forecast",
         params={
             "latitude": lat, "longitude": lon,
             "current_weather": "true",
-            "hourly": "temperature_2m,relativehumidity_2m,precipitation,weathercode",
+            "hourly": "temperature_2m,precipitation,weathercode",
+            "daily": "weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
             "timezone": "auto",
-            "forecast_days": 2,
+            "forecast_days": 3,
         },
         timeout=_TIMEOUT,
     )
@@ -211,18 +227,44 @@ def _weather_search(query: str) -> str:
     code = cur.get("weathercode")
     desc = _wmocode_description(code)
     lines = [f"{city} 当前天气：{desc}，气温 {temp}°C（Open-Meteo 实时）"]
-    # 未来 24h 每小时简况
+
+    # 今天 / 明天的 daily 预报
+    daily = data.get("daily") or {}
+    d_times = daily.get("time") or []
+    d_codes = daily.get("weathercode") or []
+    d_max = daily.get("temperature_2m_max") or []
+    d_min = daily.get("temperature_2m_min") or []
+    d_pop = daily.get("precipitation_probability_max") or []
+    day_labels = ["今天", "明天", "后天"]
+    if d_times:
+        for i in range(min(3, len(d_times))):
+            label = day_labels[i] if i < len(day_labels) else f"{d_times[i][5:]}"
+            ddesc = _wmocode_description(d_codes[i]) if i < len(d_codes) else ""
+            hi = d_max[i] if i < len(d_max) else "?"
+            lo = d_min[i] if i < len(d_min) else "?"
+            pop = d_pop[i] if i < len(d_pop) else None
+            pop_str = f"，降水概率 {pop}%" if pop is not None else ""
+            lines.append(f"{label}（{d_times[i]}）：{ddesc}，{lo}~{hi}°C{pop_str}")
+
+    # 未来逐 3 小时气温简况（自当前之后 12 小时，跨今天/明天）
     hourly = data.get("hourly") or {}
-    times = hourly.get("time") or []
-    temps = hourly.get("temperature_2m") or []
-    precip = hourly.get("precipitation") or []
-    next_temps = []
-    for i in range(0, min(24, len(times)), 3):
-        h = times[i][11:16]
-        t = temps[i] if i < len(temps) else "?"
-        next_temps.append(f"{h} {t}°C")
-    if next_temps:
-        lines.append("未来24小时气温（每3小时）：" + " · ".join(next_temps))
+    h_times = hourly.get("time") or []
+    h_temps = hourly.get("temperature_2m") or []
+    cur_iso = cur.get("time") or ""
+    hourly_bits = []
+    for i in range(len(h_times)):
+        ht = h_times[i]
+        if cur_iso and ht <= cur_iso:
+            continue
+        try:
+            if int(ht[11:13]) % 3 == 0:
+                hourly_bits.append(f"{ht[5:16]} {h_temps[i]}°C")
+        except Exception:
+            pass
+        if len(hourly_bits) >= 6:
+            break
+    if hourly_bits:
+        lines.append("未来逐3小时气温：" + " · ".join(hourly_bits))
     return "\n".join(lines)
 
 
