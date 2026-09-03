@@ -519,10 +519,17 @@ if STARDEW_MCP_ENABLED:
         _mcp.load()
         if _mcp.servers:
             ALL_TOOLS.extend(_mcp.schemas())
+            # 记录每个 MCP 工具的原始描述（供 docstring 复用，避免 LangGraph 因缺描述失败）
+            _schema_by_name = {s["function"]["name"]: s["function"].get("description", "")
+                               for s in _mcp.schemas()}
             for tname in _mcp.tool_names():
                 def _mk(tname):
+                    desc = _schema_by_name.get(tname, tname)
                     def _call(arguments=None, **kw):
+                        """调用外部 MCP 工具（星露谷游戏等）。"""
                         return _mcp.call(tname, arguments or kw)
+                    # 覆盖 docstring 为原始工具描述，LangChain tool() 依赖它
+                    _call.__doc__ = desc or "调用外部 MCP 工具。"
                     return _call
                 TOOL_REGISTRY[tname] = _mk(tname)
     except Exception as e:

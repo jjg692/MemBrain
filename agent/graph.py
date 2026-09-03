@@ -256,6 +256,13 @@ class LangGraphMemoryAgent:
         from langchain_core.tools import tool
         funcs = []
         for name, fn in TOOL_REGISTRY.items():
+            # LangChain tool() 需要 docstring 或 description；缺则兜底补一个，
+            # 避免个别注册函数（如 MCP 包装）无描述导致 Agent 图构建失败。
+            if not getattr(fn, "__doc__", None):
+                try:
+                    fn.__doc__ = f"执行工具：{name}"
+                except Exception:
+                    pass
             t = tool(fn)
             t.name = name
             funcs.append(t)

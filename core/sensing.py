@@ -73,12 +73,16 @@ def _clean_title(title: str) -> str:
 
 
 def _is_content_tab(item: dict) -> bool:
-    """判断 CDP 目标是否为`当前激活的内容标签页`。"""
+    """判断 CDP 目标是否为"可读的内容标签页"。
+
+    说明：不再把 active 作为硬性条件——用独立 user-data-dir 启动的调试实例
+    （--remote-debugging-port）里，CDP /json 的 active 标记常为空，若强制要求
+    active 会读不到任何标签。这里只要求是页面类型、非浏览器内部页即可作为候选，
+    由调用方优先取 active、无则取第一个可用内容页。
+    """
     if not isinstance(item, dict):
         return False
     if item.get("type") != "page":
-        return False
-    if not item.get("active"):
         return False
     url = (item.get("url") or "")
     # 跳过浏览器内部页面 / 扩展页
