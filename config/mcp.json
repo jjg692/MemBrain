@@ -1,13 +1,13 @@
 {
-  "_comment": "MCP 客户端配置。每个 server: {command, args, env}。暴露的工具会自动注册到 LLM。由 core/config.py 的 STARDEW_MCP_ENABLED 总开关控制是否加载。路径可用 {PROJECT_ROOT} 占位符锚定到项目根（他人拉项目任意目录可跑）。",
+  "_comment": "MCP 客户端配置。每个 server: {command, args, env}。暴露的工具会自动注册到 LLM。由 core/config.py 的 STARDEW_MCP_ENABLED 总开关控制是否加载。路径可用 {PROJECT_ROOT} 占位符锚定到项目根（他人拉项目任意目录可跑）。STARDEW_BRIDGE_PATH/ACTION_DIR 指向 SMAPI 模组 StardewMCPBridge 的真实安装目录（模组会把 bridge_data.json 写在模组目录下）。",
   "servers": [
     {
       "name": "stardew",
       "command": "node",
       "args": ["{PROJECT_ROOT}/stardew/StardewValley-MCP/mcp-server/build/index.js"],
       "env": {
-        "STARDEW_BRIDGE_PATH": "{PROJECT_ROOT}/stardew/StardewValley-MCP/Mods/StardewMCPBridge/bridge_data.json",
-        "STARDEW_ACTION_DIR": "{PROJECT_ROOT}/stardew/StardewValley-MCP/Mods/StardewMCPBridge/actions"
+        "STARDEW_BRIDGE_PATH": "E:\\SteamLibrary\\steamapps\\common\\Stardew Valley\\Mods\\StardewMCPBridge\\bridge_data.json",
+        "STARDEW_ACTION_DIR": "E:\\SteamLibrary\\steamapps\\common\\Stardew Valley\\Mods\\StardewMCPBridge\\actions"
       }
     }
   ]

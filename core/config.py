@@ -104,6 +104,10 @@ MEMORY_DEBUG = _bool(os.getenv("MEMORY_DEBUG"))
 # 开启后才会去读取 config/mcp.json 并注册 stardew 工具；关闭时这些工具完全不注册。
 # 可在管理后台 /admin/config 里修改。
 STARDEW_MCP_ENABLED = _bool(os.getenv("STARDEW_MCP_ENABLED", "false"))
+# 星露谷记忆自动沉淀：开启后后台轮询游戏状态并写入记忆（需 STARDEW_MCP_ENABLED 也开启）
+STARDEW_MEMORY_POLLER_ENABLED = _bool(os.getenv("STARDEW_MEMORY_POLLER_ENABLED", "false"))
+# 星露谷状态轮询间隔（秒）
+STARDEW_POLL_INTERVAL = _int(os.getenv("STARDEW_POLL_INTERVAL"), 60)
 
 # ===================== L3 主动信息池 =====================
 # 是否启用 L3 采集/推送（默认启用；设为 false 可关闭）
