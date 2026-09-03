@@ -78,7 +78,7 @@
     <div class="card">
       <h3>角色列表</h3>
       <table id="rolesTable">
-        <thead><tr><th>role_id</th><th>显示名</th><th>默认</th><th>头像</th><th>Live2D 模型</th><th>操作</th></tr></thead>
+        <thead><tr><th>role_id</th><th>显示名</th><th>默认</th><th>渲染</th><th>头像</th><th>Live2D 模型</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -244,6 +244,11 @@ async function loadRoles(){
       <td>${esc(r.role_id)}</td>
       <td>${esc(r.display_name)}</td>
       <td>${r.default?'⭐ 默认':'<button class="btn btn-gray" onclick="setDefault(\''+r.role_id+'\')">设为默认</button>'}</td>
+      <td>${r.rendered
+            ?'<span style="color:#07c160">● 渲染中</span>'
+            :'<button class="btn btn-gray" onclick="setRender(\''+r.role_id+'\',true)">开放渲染</button>'}
+        ${r.default?'<div style="font-size:11px;color:#999">看板娘(默认)恒渲染</div>':''}
+      </td>
       <td>${r.avatar?'<img src="'+r.avatar_url+'" style="width:30px;height:30px;border-radius:4px" onerror="this.style.display=\'none\'">':'无'}</td>
       <td style="min-width:220px">
         <div style="font-size:12px;color:#555;word-break:break-all" id="l2dpath_${r.role_id}">${esc(r.live2d_model||'')||'<span style="color:#bbb">（未设置 · 用全局默认）</span>'}</div>
@@ -276,6 +281,12 @@ async function createRole(){
 async function setDefault(roleId){
   const res=await fetch(`/admin/roles/${roleId}/default`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({default:true})});
   toast((await res.json()).message); loadRoles();
+}
+
+async function setRender(roleId, enabled){
+  const res=await fetch(`/admin/roles/${roleId}/render`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({render_enabled:enabled})});
+  const json=await res.json();
+  toast(json.message+(`（${json.rendered?'渲染中':'已关闭'}）`)); loadRoles();
 }
 
 async function deleteRole(roleId){

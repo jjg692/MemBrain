@@ -751,6 +751,8 @@
         var nh = ch * factor;
         var nw = nh * ratio;           // 保持同比例放大/缩小窗口
         resizeHostWindow(nw, nh);
+        // 记下该角色新尺寸，重启后恢复；滚轮后重贴一次角色（防极端拉伸未完全贴合）
+        setTimeout(function () { recordPetSize(); schedulePetCrop(); }, 350);
       } else {
         live2dT.s = Math.min(5, Math.max(0.2, live2dT.s * factor));
         applyT();
@@ -1674,8 +1676,10 @@
         initEyeTrack();
         // 待机表现：长时间无交互时宠物自然"活着"（动作 + 表情微变）
         startIdle();
-        // 注意：窗口自动裁剪到角色(cropToChar)已停用——角色显示大小随窗口缩放，
-        // 裁剪窗口无法让角色铺满（见 schedulePetCrop 注释）。改为调大模型 scale 填满。
+        // 窗口贴合角色（需求1）：先恢复上次记住的窗口尺寸（避免闪烁），
+        // 再做收敛式裁剪——每次量角色 bbox 后把窗口收紧到角色大小，重复直到贴合。
+        whenPetHostReady(restoreSavedPetSize);
+        schedulePetCrop();
       }
       else { hideStatus(); }
 
@@ -1726,53 +1730,111 @@
   }
 
   // ============================================================
-  // 窗口裁剪到角色（petmode）：让窗口=角色轮廓，去掉外部多余一圈
+  // 窗口贴合角色（需求1）：让窗口=角色轮廓，去掉外部多余一圈
   // 用 L2Dwidget.captureFrame 拿到当前渲染帧，扫描不透明像素包围盒，
   // 得到角色占窗口宽/高的比例 (fx, fy)，通过 petHost.cropToChar 让 Qt
-  // 把窗口收紧到角色实际尺寸并贴任务栏。角色经 100vw/stretch 后在新窗铺满。
+  // 把窗口收紧到角色实际尺寸并贴任务栏。角色经 100vw/stretch 后铺满窗口。
+  //
+  // 关键：收敛式裁剪。裁剪窗口后模型若随窗口拉伸，角色比例可能再次变化，
+  // 所以只做一次收不干净。这里重复测量→裁剪，直到 fx、fy 都接近 1（角色
+  // 铺满窗口）或已达重试上限，保证窗口最终贴合角色、无左右约 1/4 空边。
   // ============================================================
+  var petCropTries = 0;
+  function measurePetBbox(cb) {
+    // 用 captureFrame 拿当前渲染帧做像素扫描，得到角色占窗口的 (fx, fy)。
+    // 若运行时未就绪则回调 null，由上层收尾（不破坏已有窗口尺寸）。
+    try {
+      if (window.L2Dwidget && window.L2Dwidget.captureFrame) {
+        window.L2Dwidget.captureFrame(function (dataUrl) { scanFrame(dataUrl, cb); });
+        return;
+      }
+    } catch (e) {}
+    cb(null, null);
+  }
+  function scanFrame(dataUrl, cb) {
+    if (!dataUrl) { cb(null, null); return; }
+    var img = new Image();
+    img.onload = function () {
+      try {
+        var cv = document.createElement("canvas");
+        cv.width = img.width; cv.height = img.height;
+        var ctx = cv.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        var d = ctx.getImageData(0, 0, img.width, img.height).data;
+        var minx = img.width, miny = img.height, maxx = -1, maxy = -1, cnt = 0;
+        for (var y = 0; y < img.height; y++) {
+          for (var x = 0; x < img.width; x++) {
+            if (d[(y * img.width + x) * 4 + 3] > 24) {
+              if (x < minx) minx = x;
+              if (x > maxx) maxx = x;
+              if (y < miny) miny = y;
+              if (y > maxy) maxy = y;
+              cnt++;
+            }
+          }
+        }
+        if (!cnt) { cb(null, null); return; }
+        var fx = Math.min(1, (maxx - minx) / img.width + 0.02);
+        var fy = Math.min(1, (maxy - miny) / img.height + 0.02);
+        cb(fx, fy);
+      } catch (e) { cb(null, null); }
+    };
+    img.onerror = function () { cb(null, null); };
+    img.src = dataUrl;
+  }
+  // 记住当前窗口尺寸（每角色独立存，滚轮/fit 后都写）
+  function recordPetSize() {
+    try {
+      var key = "live2d_pet_size_" + (state.role_id || "default");
+      localStorage.setItem(key, JSON.stringify({ w: window.innerWidth, h: window.innerHeight }));
+    } catch (e) {}
+  }
+  // 恢复该角色上次记住的窗口尺寸（若 petHost 可用）
+  function restoreSavedPetSize() {
+    if (!state.petmode) return;
+    try {
+      var key = "live2d_pet_size_" + (state.role_id || "default");
+      var v = JSON.parse(localStorage.getItem(key) || "null");
+      if (v && v.w && v.h && petHost && petHost.resizeWindow) {
+        petHost.resizeWindow(Math.round(v.w), Math.round(v.h));
+      }
+    } catch (e) {}
+  }
+  // petHost（QWebChannel 桥）是异步注入的，可能晚于模型渲染就绪。
+  // 等到桥就绪再执行 fn；有次数上限兜底，避免挂死。
+  function whenPetHostReady(fn, tries) {
+    var n = tries == null ? 20 : tries;
+    if (window.Live2DHost && window.Live2DHost.cropToChar) {
+      try { fn(); } catch (e) {}
+      return;
+    }
+    if (n <= 0) return;
+    setTimeout(function () { whenPetHostReady(fn, n - 1); }, 250);
+  }
   function schedulePetCrop() {
     if (!state.petmode) return;
-    // 等模型渲染稳定 + petHost 桥就绪后测量一次
+    // 等模型渲染稳定 + petHost 桥就绪后测量裁剪
     setTimeout(function () {
+      whenPetHostReady(function () {
+        petCropTries = 0;
+        doPetCropStep();
+      });
+    }, 400);
+  }
+  function doPetCropStep() {
+    if (petCropTries >= 6) { recordPetSize(); return; }
+    petCropTries++;
+    if (!window.Live2DHost || !window.Live2DHost.cropToChar) return;
+    measurePetBbox(function (fx, fy) {
       try {
-        if (!window.L2Dwidget || !window.L2Dwidget.captureFrame) return;
-        if (!window.Live2DHost || !window.Live2DHost.cropToChar) return;
-        window.L2Dwidget.captureFrame(function (dataUrl) {
-          var img = new Image();
-          img.onload = function () {
-            try {
-              var cv = document.createElement("canvas");
-              cv.width = img.width; cv.height = img.height;
-              var ctx = cv.getContext("2d");
-              ctx.drawImage(img, 0, 0);
-              var d = ctx.getImageData(0, 0, img.width, img.height).data;
-              var minx = img.width, miny = img.height, maxx = -1, maxy = -1, cnt = 0;
-              for (var y = 0; y < img.height; y++) {
-                for (var x = 0; x < img.width; x++) {
-                  if (d[(y * img.width + x) * 4 + 3] > 24) { // 不透明像素
-                    if (x < minx) minx = x;
-                    if (x > maxx) maxx = x;
-                    if (y < miny) miny = y;
-                    if (y > maxy) maxy = y;
-                    cnt++;
-                  }
-                }
-              }
-              if (!cnt) return;
-              var fx = (maxx - minx) / img.width;
-              var fy = (maxy - miny) / img.height;
-              // 留一点边距，避免完全贴死
-              fx = Math.min(1, fx + 0.02);
-              fy = Math.min(1, fy + 0.02);
-              window.Live2DHost.cropToChar(fx, fy);
-            } catch (e) {}
-          };
-          img.onerror = function () {};
-          img.src = dataUrl;
-        });
-      } catch (e) {}
-    }, 2000);
+        if (fx == null) { recordPetSize(); return; }
+        // 已足够贴合则收尾
+        if (fx >= 0.96 && fy >= 0.96) { recordPetSize(); return; }
+        window.Live2DHost.cropToChar(fx, fy);
+        // 等 Qt 完成 resize + 页面重排后再量下一次（收敛）
+        setTimeout(doPetCropStep, 500);
+      } catch (e) { recordPetSize(); }
+    });
   }
 
   // 暴露接口到 window.Live2D

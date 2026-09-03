@@ -92,6 +92,27 @@ def setup_admin(app):
         app.role_manager.update_role(role_id, default=body.get("default", True))
         return {"code": 0, "message": "已设置"}
 
+    @router.post("/roles/{role_id}/render")
+    async def set_role_render(role_id: str, request: Request):
+        """「渲染角色管理」：开关该角色是否在桌面宠物渲染窗中渲染。
+        body: {render_enabled: true|false}。默认角色（看板娘）始终渲染，不受开关影响。"""
+        body = await request.json()
+        rendered = bool(body.get("render_enabled", False))
+        ok = app.role_manager.set_render_enabled(role_id, rendered)
+        if not ok:
+            return {"code": -1, "message": "角色不存在"}
+        return {"code": 0, "message": "已更新", "rendered": app.role_manager.get(role_id).is_rendered()}
+
+    @router.get("/roles/rendered")
+    async def list_rendered_roles():
+        """返回当前需要在桌面宠物中渲染的角色（供 Qt 多窗口宿主对齐窗口）。"""
+        items = []
+        for role in app.role_manager.rendered_roles():
+            d = role.to_dict()
+            d["rendered"] = True
+            items.append(d)
+        return {"code": 0, "data": items}
+
     # ===================== Live2D 模型路径（每角色） =====================
 
     @router.get("/live2d/models")

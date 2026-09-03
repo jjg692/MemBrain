@@ -113,6 +113,82 @@ def _screen_size():
     return 1280, 800
 
 
+class RoleRenderMgr:
+    """「渲染角色管理」：按后端 /admin/roles/rendered 的动态开关，维护每个渲染角色的
+    独立透明宠物窗口。默认角色（看板娘）由主宠物窗承担，这里只管理"额外"渲染角色。
+
+    工作方式：周期轮询后端开放渲染的角色列表 → 与当前已开的窗口 diff →
+    新增缺失角色的窗口、关闭已被关掉的角色窗口。这样后台开关渲染时，
+    无需重启 Qt 宿主即可即时生效（打开/关闭对应角色的像素窗口）。
+    """
+
+    def __init__(self, spawn_role_win, poll_interval: float = 2.0):
+        self._spawn = spawn_role_win
+        self._poll_interval = poll_interval
+        self._wins: list = []          # 已开的角色窗（不含主看板娘窗）
+        self._timer = None
+        self._polling = False
+        self._started = False
+
+    def _fetch_rendered(self):
+        try:
+            r = requests.get(HOST_URL + "/admin/roles/rendered", timeout=2.0)
+            j = r.json()
+            if j.get("code") == 0:
+                return [d for d in j.get("data", [])]
+        except Exception:
+            return None
+        return None
+
+    def reconcile(self):
+        if self._polling:
+            return
+        self._polling = True
+        try:
+            rendered = self._fetch_rendered()
+            if rendered is None:
+                return
+            # 已开窗口的 role_id 集合
+            open_ids = {w._role_id for w in self._wins}
+            # 需要开的（忽略默认角色——由主窗承担）
+            wanted = {d["role_id"]: d for d in rendered if not d.get("default")}
+            # 关掉已被后台关掉渲染的角色窗
+            for w in list(self._wins):
+                if w._role_id not in wanted:
+                    try:
+                        w.close()
+                    except Exception:
+                        pass
+                    self._wins.remove(w)
+            # 新开缺失的角色窗
+            for rid, d in wanted.items():
+                if rid not in open_ids:
+                    try:
+                        win = self._spawn(rid, d.get("display_name", rid))
+                        win.show()
+                        self._wins.append(win)
+                    except Exception:
+                        pass
+        finally:
+            self._polling = False
+
+    def start(self):
+        """启动轮询定时器（需要 QTimer；在 QApplication 创建后调用）。"""
+        if self._started:
+            return
+        from PySide6.QtCore import QTimer
+        self._started = True
+        timer = QTimer()
+        timer.timeout.connect(self.reconcile)
+        timer.start(int(self._poll_interval * 1000))
+        self._timer = timer
+        # 立即对齐一次（创建窗口页 load 是异步的，会在 boot 里自动贴合角色）
+        try:
+            self.reconcile()
+        except Exception:
+            pass
+
+
 def build_windows():
     """创建窗口。返回 (主窗口, 可选副窗口)。"""
     from PySide6.QtCore import Qt, QUrl, QEvent, QObject
@@ -399,6 +475,31 @@ def build_windows():
     # 标记哪个是腹 明宠物窗、哪个是交互窗，供托盘逻辑区分
     main_win._is_pet = True
     sub_win._is_ui = True
+
+    # ---- 需求2：每个渲染角色一个独立透明宠物窗 ----
+    # 默认角色（看板娘）由 main_win 承担（/live2d?petmode=1 自动解析默认角色）；
+    # 其它开放渲染的角色由 RoleRenderMgr 按后台开关动态增开 / 关闭。
+    _role_counter = [0]
+    def spawn_role_win(role_id, display_name):
+        w = make_view(
+            HOST_URL + "/live2d?petmode=1&role_id=" + role_id,
+            PET_W, PET_H, True,
+            "MemBrain 宠物 · " + (display_name or role_id),
+        )
+        w._is_pet = True
+        w._role_id = role_id
+        sw2, sh2 = _screen_size()
+        _role_counter[0] += 1
+        idx = _role_counter[0]
+        # 默认宠物窗占据右下角；其它角色窗在其上方逐层叠放，避免互相遮挡
+        x = max(0, sw2 - PET_W - 16)
+        y = max(0, sh2 - PET_H - idx * (PET_H + 4))
+        w.move(x, y)
+        if getattr(w, "_start_poll", None):
+            w._start_poll()
+        return w
+
+    main_win._role_render_mgr = RoleRenderMgr(spawn_role_win)
     return main_win, sub_win
 
 
@@ -480,6 +581,14 @@ def main():
     # 宠物窗（透明悬浮）启动光标轮询定时器（Qt→页面 兜底视线跟随）
     if getattr(main_win, "_is_pet", False) and getattr(main_win, "_start_poll", None):
         main_win._start_poll()
+
+    # 需求2：启动「渲染角色管理」轮询——按后台开关动态增开/关闭各渲染角色窗口
+    try:
+        mgr = getattr(main_win, "_role_render_mgr", None)
+        if mgr:
+            mgr.start()
+    except Exception as e:
+        log(f"渲染角色管理启动失败: {e}")
 
     log(f"模式 {PET_MODE} 启动完成")
     sys.exit(app.exec())

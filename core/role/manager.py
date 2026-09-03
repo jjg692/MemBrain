@@ -24,10 +24,16 @@ class RoleConfig:
     avatar: str = ""
     default: bool = False
     description: str = ""
-    live2d_model: str = ""   # Live2D 模型路径（live2d/ 下的相对目录路径），留空用全局默认
+    live2d_model: str = ""      # Live2D 模型路径（live2d/ 下的相对目录路径），留空用全局默认
+    render_enabled: bool = False  # 「渲染角色管理」：是否在桌面宠物里渲染此角色（每角色一个独立窗口）
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    def is_rendered(self) -> bool:
+        """是否应渲染此角色：默认角色（看板娘）始终渲染，其他按 render_enabled 开关。
+        默认角色一旦被设为 default 即无条件渲染，保证看板娘一定在桌面上。"""
+        return bool(self.default) or bool(self.render_enabled)
 
 
 class RoleManager:
@@ -46,14 +52,17 @@ class RoleManager:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             for item in data.get("roles", []):
+                _default = item.get("default", False)
+                # 向后兼容：默认角色（看板娘）默认开放渲染；其他角色缺省默认关闭渲染
                 role = RoleConfig(
                     role_id=item["role_id"],
                     display_name=item.get("display_name", item["role_id"]),
                     prompt_file=item.get("prompt_file", f"role_prompt_{item['role_id']}.txt"),
                     avatar=item.get("avatar", ""),
-                    default=item.get("default", False),
+                    default=_default,
                     description=item.get("description", ""),
                     live2d_model=item.get("live2d_model", ""),
+                    render_enabled=item.get("render_enabled", _default),
                 )
                 self._roles[role.role_id] = role
         except Exception as e:
@@ -88,8 +97,22 @@ class RoleManager:
             d = role.to_dict()
             d["has_prompt"] = bool(self.load_prompt(role.role_id))
             d["avatar_url"] = f"/static/avatars/agents/{role.avatar}" if role.avatar else ""
+            # 计算渲染状态：默认角色（看板娘）视为渲染中
+            d["rendered"] = role.is_rendered()
             items.append(d)
         return items
+
+    def rendered_roles(self) -> List[RoleConfig]:
+        """返回需要渲染的角色（默认角色无条件 + 显式开启渲染的角色）"""
+        return [r for r in self.all_roles() if r.is_rendered()]
+
+    def set_render_enabled(self, role_id: str, enabled: bool) -> bool:
+        role = self._roles.get(role_id)
+        if not role:
+            return False
+        role.render_enabled = bool(enabled)
+        self._save()
+        return True
 
     def get(self, role_id: str) -> Optional[RoleConfig]:
         return self._roles.get(role_id)
@@ -135,7 +158,7 @@ class RoleManager:
 
     def update_role(self, role_id: str, display_name: str = None, prompt: str = None,
                     description: str = None, default: bool = None,
-                    live2d_model: str = None) -> bool:
+                    live2d_model: str = None, render_enabled: bool = None) -> bool:
         role = self._roles.get(role_id)
         if not role:
             return False
@@ -145,6 +168,8 @@ class RoleManager:
             role.description = description
         if live2d_model is not None:
             role.live2d_model = live2d_model or ""
+        if render_enabled is not None:
+            role.render_enabled = bool(render_enabled)
         if prompt is not None:
             self._write_prompt_file(role, prompt)
             self.reload_prompt(role_id)
