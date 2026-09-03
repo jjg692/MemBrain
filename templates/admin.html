@@ -79,6 +79,8 @@
     <div class="snav-item" data-panel="stats">📊 系统统计</div>
     <div class="snav-item" data-panel="llm">🤖 LLM 管理</div>
     <div class="snav-item" data-panel="config">⚙️ 配置管理</div>
+    <div class="snav-sep"></div>
+    <div class="snav-item" data-panel="stardew">🌾 星露谷</div>
   </div>
   <div class="content">
 
@@ -234,6 +236,30 @@
       </table>
     </div>
   </div>
+
+  <!-- ===== 星露谷 ===== -->
+  <div class="panel" id="panel-stardew">
+    <div class="card">
+      <h3>🌾 星露谷 MCP 管理</h3>
+      <div class="stat-grid" style="margin-bottom:16px">
+        <div class="stat-box"><div class="num" id="sdEnabled">—</div><div class="label">扩展开关</div></div>
+        <div class="stat-box"><div class="num" id="sdTools">—</div><div class="label">已注册工具</div></div>
+        <div class="stat-box"><div class="num" id="sdPoll">—</div><div class="label">记忆轮询</div></div>
+        <div class="stat-box"><div class="num" id="sdEvents">—</div><div class="label">已沉淀事件</div></div>
+      </div>
+      <p class="hint" style="margin-bottom:12px">扩展默认<span style="color:#e6a23c">关闭</span>。开启请在「配置管理」中把 <code>星露谷 MCP 扩展</code> (STARDEW_MCP_ENABLED) 设为 <code>true</code> 并<b>重启后端</b>；记忆自动沉淀默认也关，可把 <code>星露谷记忆自动沉淀</code> (STARDEW_MEMORY_POLLER_ENABLED) 设为 <code>true</code>（同样需重启）。</p>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px">
+        <button class="btn btn-blue" onclick="testStardew()">🔌 测试 MCP 链路</button>
+        <button class="btn btn-green" onclick="loadStardew()">🔄 刷新状态</button>
+        <button class="btn btn-gray" onclick="refreshStardew()">⚡ 立即读取游戏状态</button>
+      </div>
+      <div id="sdTestResult" class="hint" style="margin-bottom:14px"></div>
+      <h4 style="margin:10px 0 6px">当前游戏状态</h4>
+      <pre id="sdState" style="background:#fafafa;border:1px solid #eee;border-radius:6px;padding:10px;font-size:12px;white-space:pre-wrap;max-height:240px;overflow:auto">等待读取…</pre>
+      <h4 style="margin:14px 0 6px">最近游戏记忆</h4>
+      <div id="sdMemories" class="hint" style="line-height:1.7">尚未读取。</div>
+    </div>
+  </div>
   </div><!-- /content -->
 </div>
 
@@ -268,6 +294,7 @@ document.querySelectorAll('.snav-item').forEach(tab=>{
     const p=tab.dataset.panel;
     if(p==='render') loadRenderRoles();
     if(p==='model') loadModelRows();
+    if(p==='stardew') loadStardew();
   };
 });
 
@@ -677,6 +704,54 @@ async function saveLLM(){
   const json=await res.json();
   toast(json.message || '已保存');
   loadLLM();
+}
+
+// ===== 星露谷 =====
+async function loadStardew(){
+  try{
+    const res=await fetch('/admin/stardew/status'); const json=await res.json();
+    const d=json.data||{};
+    $('sdEnabled').textContent = d.enabled ? '开' : '关';
+    $('sdEnabled').style.color = d.enabled ? '#07c160' : '#999';
+    $('sdTools').textContent = d.tools_count!=null?d.tools_count:0;
+    const p=d.poller||{};
+    const run = p.running!==undefined ? (p.running?'运行中':'停止') : '—';
+    $('sdPoll').textContent = run;
+    $('sdPoll').style.color = p.running ? '#07c160' : (d.enabled?'#e6a23c':'#999');
+    $('sdEvents').textContent = p.recorded_events!=null?p.recorded_events:0;
+    const state=p.current_state;
+    $('sdState').textContent = state ? JSON.stringify(state,null,2) : (p.last_error||'尚无游戏状态（游戏未开 / bridge 未就绪 / 未开启扩展）');
+    // 最近记忆
+    const mems=(d.memories||'').trim();
+    const box=$('sdMemories');
+    if(mems){
+      box.className=''; box.style.cssText='line-height:1.7';
+      box.innerHTML=mems.split('\n').map(m=>'<div style="padding:4px 0;border-bottom:1px solid #f2f2f2">'+esc(m)+'</div>').join('');
+    } else {
+      box.className='hint'; box.innerHTML='暂无游戏记忆沉淀。';
+    }
+  }catch(e){
+    $('sdState').textContent='读取失败: '+e;
+  }
+}
+async function testStardew(){
+  const box=$('sdTestResult');
+  box.textContent='测试中…'; box.style.color='#666';
+  try{
+    const res=await fetch('/admin/stardew/test',{method:'POST'}); const json=await res.json();
+    const d=json.data||{};
+    if(d.ok){ box.textContent='✅ '+json.message; box.style.color='#07c160'; }
+    else { box.textContent='❌ '+(json.message||'链路异常'); box.style.color='#ff4d4f'; }
+    if(d.raw){ $('sdState').textContent=d.raw; }
+  }catch(e){ box.textContent='❌ 请求失败: '+e; box.style.color='#ff4d4f'; }
+}
+async function refreshStardew(){
+  const box=$('sdTestResult');
+  box.textContent='刷新中…'; box.style.color='#666';
+  try{
+    const res=await fetch('/admin/stardew/refresh',{method:'POST'}); const json=await res.json();
+    toast(json.message||'已刷新'); loadStardew();
+  }catch(e){ box.textContent='❌ '+e; box.style.color='#ff4d4f'; }
 }
 
 // ===== 初始化 =====

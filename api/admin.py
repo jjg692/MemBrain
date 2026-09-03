@@ -293,4 +293,85 @@ def setup_admin(app):
             return {"code": -1, "message": "不可修改的配置项"}
         return {"code": 0, "message": f"{key} 已更新并持久化到 .env"}
 
+    # ===================== 星露谷 MCP 管理 =====================
+
+    @router.get("/stardew/status")
+    async def stardew_status():
+        """返回星露谷运行时状态：开关、轮询器状态、当前游戏状态、最近记忆。"""
+        data = {"enabled": False, "tools_count": 0}
+        # 是否开启（以 config/mcp.json 未加载时为准）
+        try:
+            from core.config import STARDEW_MCP_ENABLED
+            data["enabled"] = bool(STARDEW_MCP_ENABLED)
+        except Exception:
+            pass
+        # 已注册的 mcp_stardew_* 工具数
+        try:
+            from core.tools import TOOL_REGISTRY
+            data["tools_count"] = len([k for k in TOOL_REGISTRY if k.startswith("mcp_") and "stardew" in k])
+        except Exception:
+            pass
+        # 轮询器状态
+        try:
+            poller = getattr(app, "stardew_poller", None)
+            if poller is not None:
+                data["poller"] = poller.status()
+        except Exception as e:
+            log_error("admin.stardew.status", e)
+        # 最近游戏记忆（L1 带 [星露谷] 标记）
+        try:
+            from stardew.game_memory import GameMemoryBridge
+            bridge = GameMemoryBridge(app.memory_manager, role_id="kasumi")
+            data["memories"] = bridge.remember("default_user", "星露谷", top_k=8)
+        except Exception:
+            data["memories"] = ""
+        return {"code": 0, "data": data}
+
+    @router.post("/stardew/test")
+    async def stardew_test():
+        """测试 MCP 星露谷链路：尝试读取一次游戏状态。"""
+        result = {"ok": False}
+        # 先检查扩展是否开启、工具是否注册
+        try:
+            from core.tools import TOOL_REGISTRY
+            has_tools = any(k.startswith("mcp_") and k.endswith("get_state") for k in TOOL_REGISTRY)
+            state_tool = next((k for k in TOOL_REGISTRY
+                               if k.startswith("mcp_") and k.endswith("get_state")), None)
+        except Exception:
+            has_tools, state_tool = False, None
+        if not has_tools or not state_tool:
+            return {"code": -1, "data": {"ok": False},
+                    "message": "扩展开关或 MCP 服务器未就绪（请先在配置管理开启 STARDEW_MCP_ENABLED 并重启后端）"}
+        try:
+            from core.mcp_client import get_mcp_manager
+            mgr = get_mcp_manager()
+            raw = None
+            try:
+                raw = mgr.call(state_tool, {})
+            except Exception as e:
+                return {"code": -1, "data": {"ok": False, "error": f"调用失败: {e}"}}
+            text = (raw or "").strip()
+            result["ok"] = bool(text) and not text.startswith("Error") and "工具错误" not in text
+            result["raw"] = text[:800]
+            if not result["ok"]:
+                result["error"] = text[:200] or "无返回"
+            return {"code": 0 if result["ok"] else -1, "data": result,
+                    "message": "链路正常，已读到游戏状态" if result["ok"] else "未读到游戏状态（游戏未开或 bridge 未就绪）"}
+        except Exception as e:
+            log_error("admin.stardew.test", e)
+            return {"code": -1, "data": {"ok": False, "error": str(e)}, "message": f"测试失败: {e}"}
+
+    @router.post("/stardew/refresh")
+    async def stardew_refresh():
+        """强制轮询器立即读取一次并（如有变化）沉淀记忆。"""
+        try:
+            poller = getattr(app, "stardew_poller", None)
+            if poller is None:
+                return {"code": -1, "message": "轮询器未初始化（需开启星露谷 MCP 后重启生效）"}
+            poller.record_fingerprint()
+            return {"code": 0, "data": poller.status(), "message": "已刷新"}
+        except Exception as e:
+            log_error("admin.stardew.refresh", e)
+            return {"code": -1, "message": f"刷新失败: {e}"}
+
     return router

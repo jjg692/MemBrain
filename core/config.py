@@ -217,6 +217,8 @@ EDITABLE_KEYS = {
     "BAIDU_API_KEY": ("百度搜索 Key", "str", BAIDU_API_KEY),
     "LIVE2D_BODY_MODE": ("Live2D 情绪表达模式 (B/C)", "str", LIVE2D_BODY_MODE),
     "STARDEW_MCP_ENABLED": ("星露谷 MCP 扩展", "bool", STARDEW_MCP_ENABLED),
+    "STARDEW_MEMORY_POLLER_ENABLED": ("星露谷记忆自动沉淀", "bool", _bool(os.getenv("STARDEW_MEMORY_POLLER_ENABLED", "false"))),
+    "STARDEW_POLL_INTERVAL": ("星露谷状态轮询间隔(秒)", "float", float(os.getenv("STARDEW_POLL_INTERVAL", "60"))),
     "ENVIRONMENT_SENSING_ENABLED": ("浏览器感知（标签页/前台窗口/摘要）总开关", "bool", ENVIRONMENT_SENSING_ENABLED),
     "BROWSER_DEBUG_PORT": ("浏览器远程调试端口", "int", BROWSER_DEBUG_PORT),
     "BROWSER_TAB_SENSING_ENABLED": ("标签页感知（读当前浏览器标签）", "bool", BROWSER_TAB_SENSING_ENABLED),

@@ -97,6 +97,24 @@ gb.record_event(user_id, "今天和用户一起在矿井挖到一颗钻石")
 gb.remember(user_id, "矿井")                 # 查游戏回忆
 ```
 
+### 6.1 自动记忆沉淀（运行时旁路观察者）
+
+`stardew/runtime.py` 的 `GameStatePoller` 让"游戏经历自动进记忆"**真正在运行时生效**：
+- 后台线程每 `STARDEW_POLL_INTERVAL`（秒，默认 60）只读一次 `mcp_*_get_state`（零副作用）。
+- 检测到有意义的游戏状态变化（季节/日期/天气/地点/金钱等）时，自动用 `GameMemoryBridge`
+  反写一条"星露谷发生了什么"到 L1/L4，宠物以后对话能回忆。
+- 需要两个开关全开（管理后台「配置管理」或 `.env`）并**重启后端**：
+  - `STARDEW_MCP_ENABLED=true`（MCP 链路）
+  - `STARDEW_MEMORY_POLLER_ENABLED=true`（记忆自动沉淀；内存访问由 STARDEW_MCP_ENABLED 决定）
+- 优雅降级：游戏未开 / bridge 缺失 / MCP 未启动时静默跳过，绝不打扰主流程。
+
+### 6.2 后台管理页
+
+管理后台侧边栏新增「🌾 星露谷」页，提供：
+- 扩展开关 / 工具数 / 轮询状态 / 已沉淀事件统计
+- `🔌 测试 MCP 链路`、`⚡ 立即读取游戏状态`、`🔄 刷新状态`
+- 当前游戏状态 JSON + 最近游戏记忆回显
+
 ---
 
 ## 7. 目录结构
@@ -105,6 +123,7 @@ gb.remember(user_id, "矿井")                 # 查游戏回忆
 stardew/
 ├── __init__.py            # 可选导入，纯文档包
 ├── game_memory.py         # 方向一：游戏事件 → 记忆
+├── runtime.py             # 运行时：状态轮询 → 自动沉淀记忆 + 后台状态
 ├── squad.py               # 方向二：多 agent 协调（预留）
 └── StardewValley-MCP/     # 开源 MCP 仓库（node_modules/build 不入库）
 ```

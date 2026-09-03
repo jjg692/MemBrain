@@ -113,6 +113,24 @@ class AppInitializer:
         except Exception:
             pass
 
+        # 星露谷运行时桥（可选扩展）：游戏状态自动沉淀记忆
+        self.stardew_poller = None
+        try:
+            from core.config import STARDEW_MCP_ENABLED
+            from stardew.runtime import GameStatePoller
+            from stardew.game_memory import get_game_memory
+            if STARDEW_MCP_ENABLED:
+                bridge = get_game_memory(self.memory_manager, role_id="kasumi")
+                from core.config import STARDEW_POLL_INTERVAL
+                self.stardew_poller = GameStatePoller(
+                    memory_bridge=bridge,
+                    interval=float(STARDEW_POLL_INTERVAL),
+                    role_id="kasumi",
+                )
+        except Exception as e:
+            log_error("Stardew", f"星露谷运行时桥初始化失败（跳过）: {e}")
+            self.stardew_poller = None
+
         log_info("Init", "AppInitializer 组装完成")
 
     def load_all_role_facts(self):
@@ -181,6 +199,21 @@ class AppInitializer:
         if self._l3_stop is not None:
             self._l3_stop.set()
             log_info("L3", "L3 线程已请求停止")
+
+    def start_stardew_poller(self):
+        """启动星露谷状态轮询（MCP 开启且桥已建好时）"""
+        if self.stardew_poller is not None:
+            try:
+                self.stardew_poller.start()
+            except Exception as e:
+                log_error("Stardew", f"启动轮询失败: {e}")
+
+    def stop_stardew_poller(self):
+        if self.stardew_poller is not None:
+            try:
+                self.stardew_poller.stop()
+            except Exception:
+                pass
 
     def get_contact_info(self) -> list:
         return self.role_manager.list_contacts()
