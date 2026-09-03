@@ -106,6 +106,13 @@ class AppInitializer:
             mood_trend=self.mood_trend, routine=self.routine_model, city=PERCEPTION_CITY
         ) if PERCEPTION_ENABLED else None
 
+        # 环境感知工具：注入感知管理器供 LLM 主动查询
+        try:
+            from core.sensing import configure_sensing
+            configure_sensing(perception_manager=self.perception)
+        except Exception:
+            pass
+
         log_info("Init", "AppInitializer 组装完成")
 
     def load_all_role_facts(self):

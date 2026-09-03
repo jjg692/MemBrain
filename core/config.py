@@ -134,6 +134,31 @@ PERCEPTION_FILE = str(Path(PROJECT_ROOT) / os.getenv("PERCEPTION_FILE", "percept
 MOOD_TREND_MAX_SAMPLES = _int(os.getenv("MOOD_TREND_MAX_SAMPLES"), 200)
 ROUTINE_WINDOW_DAYS = _int(os.getenv("ROUTINE_WINDOW_DAYS"), 30)
 
+# ===================== 环境感知工具（LLM 主动查询） =====================
+# 总开关：注册并暴露给 LLM 的"环境感知工具"（标签页 / 前台窗口 / 感知摘要）。
+# 默认开启；工具组内每个工具（标签页/前台窗口/感知摘要）可单独关闭（见下方各开关）。
+# 注：标签页读取仍需浏览器以 --remote-debugging-port 启动，读不到时如实说明，不伪造。
+ENVIRONMENT_SENSING_ENABLED = _bool(os.getenv("ENVIRONMENT_SENSING_ENABLED", "true"))
+# 浏览器远程调试端口（用户需以 --remote-debugging-port=此端口 启动 Chrome/Edge）
+BROWSER_DEBUG_PORT = _int(os.getenv("BROWSER_DEBUG_PORT", "9222"), 9222)
+# 浏览器 CDP 请求超时（秒）
+BROWSER_SENSING_TIMEOUT = _float(os.getenv("BROWSER_SENSING_TIMEOUT", "3"), 3.0)
+# 标签页标题最多保留字符数（截断噪音）
+MAX_TAB_TITLE_CHARS = _int(os.getenv("MAX_TAB_TITLE_CHARS", "40"), 40)
+# 浏览器标签感知开关（在总开关开启前提下，单独控制是否读取当前标签页；false 则 get_current_tab 返回未开启）
+BROWSER_TAB_SENSING_ENABLED = _bool(os.getenv("BROWSER_TAB_SENSING_ENABLED", "true"))
+# 感知摘要工具开关（在总开关开启前提下，单独控制 get_perception_summary 是否可用）
+PERCEPTION_SUMMARY_SENSING_ENABLED = _bool(os.getenv("PERCEPTION_SUMMARY_SENSING_ENABLED", "true"))
+
+# ===================== 前台窗口感知（纯本地） =====================
+# 通过 Windows 原生 GetForegroundWindow 读取"用户当前聚焦的前台窗口"（应用+标题），
+# 与浏览器标签页感知互补（不限浏览器）。仅 Windows 生效；失败置空，不伪造。
+FOREGROUND_SENSING_ENABLED = _bool(os.getenv("FOREGROUND_SENSING_ENABLED", "true"))
+# 采集超时（秒，防卡住）
+FOREGROUND_SENSING_TIMEOUT = _float(os.getenv("FOREGROUND_SENSING_TIMEOUT", "2"), 2.0)
+# 感知→表达触发对齐：前台/标签页变化时给低频触发提示。默认开（需总开关也开才生效）。
+SENSING_TRIGGER_ENABLED = _bool(os.getenv("SENSING_TRIGGER_ENABLED", "true"))
+
 
 # ===================== 关系记忆内核（自我模型 / 共同经历 / 情绪衰减） =====================
 # 关系记忆 JSON 持久化文件（与 ChromaDB 解耦，避免嵌入调用）
@@ -192,6 +217,12 @@ EDITABLE_KEYS = {
     "BAIDU_API_KEY": ("百度搜索 Key", "str", BAIDU_API_KEY),
     "LIVE2D_BODY_MODE": ("Live2D 情绪表达模式 (B/C)", "str", LIVE2D_BODY_MODE),
     "STARDEW_MCP_ENABLED": ("星露谷 MCP 扩展", "bool", STARDEW_MCP_ENABLED),
+    "ENVIRONMENT_SENSING_ENABLED": ("浏览器感知（标签页/前台窗口/摘要）总开关", "bool", ENVIRONMENT_SENSING_ENABLED),
+    "BROWSER_DEBUG_PORT": ("浏览器远程调试端口", "int", BROWSER_DEBUG_PORT),
+    "BROWSER_TAB_SENSING_ENABLED": ("标签页感知（读当前浏览器标签）", "bool", BROWSER_TAB_SENSING_ENABLED),
+    "FOREGROUND_SENSING_ENABLED": ("前台窗口感知（读当前前台应用）", "bool", FOREGROUND_SENSING_ENABLED),
+    "PERCEPTION_SUMMARY_SENSING_ENABLED": ("感知摘要工具（get_perception_summary）", "bool", PERCEPTION_SUMMARY_SENSING_ENABLED),
+    "SENSING_TRIGGER_ENABLED": ("感知→表达触发提示", "bool", SENSING_TRIGGER_ENABLED),
 }
 
 

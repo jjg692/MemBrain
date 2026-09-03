@@ -38,7 +38,12 @@ from core.role.manager import RoleManager
 from core.room.message_bus import MessageBus
 from core.behavior import BehaviorMapper
 from agent.planner import TaskPlanner
-from core.config import LIVE2D_BODY_MODE
+from core.config import (
+    LIVE2D_BODY_MODE,
+    ENVIRONMENT_SENSING_ENABLED,
+    BROWSER_TAB_SENSING_ENABLED,
+    FOREGROUND_SENSING_ENABLED,
+)
 from core.body_tools import merge_express
 
 from core.relation_memory import RelationMemory, get_relation_memory, half_life_decay, build_reflection_prompt, parse_reflection
@@ -170,6 +175,15 @@ class LangGraphMemoryAgent:
             timing = self._timing_hint(user_id)
             if timing:
                 lines.append(timing)
+            # 感知→表达触发对齐：前台/标签页变化时给低频提示（主动开口也能自然接上一句）
+            try:
+                from core.sensing_hint import sensing_change_hint
+                change_hint = sensing_change_hint(user_id)
+                if change_hint:
+                    lines.append(change_hint)
+            except Exception:
+                pass
+
             # 1) 未兑现承诺
             promises = rel.pending_promises(user_id, n=3)
             if promises:
@@ -608,6 +622,16 @@ class LangGraphMemoryAgent:
             except Exception:
                 pass
 
+        # 感知→表达触发对齐：前台/标签页变化时给低频提示（感知当前变化，落地主动择时）
+        try:
+            from core.sensing_hint import sensing_change_hint
+            _chg = sensing_change_hint(user_id)
+            if _chg:
+                lines.append("【感知到的变化】" + _chg)
+        except Exception:
+            pass
+
+
         # 关系记忆内核：持续存在的自我模型 / 对用户的长久理解 / 共同经历（底层内在状态层）
         try:
             rel = self._get_relation()
@@ -633,6 +657,25 @@ class LangGraphMemoryAgent:
             "   · 纯社交寒暄、闲聊、开玩笑、分享计划——这些都**不需要任何网络查询**。\n"
             "   只有用户**明确要求**查实时/最新/外部资料时，才调用 search_web。"
         )
+
+        # 环境感知能力：仅当感知开关开启时，告知 LLM 它能看到当前浏览器标签页/前台窗口/拉取感知摘要。
+        # 关闭时完全不提，避免 LLM 误以为有这能力却读不到（不伪造）。
+        try:
+            if ENVIRONMENT_SENSING_ENABLED:
+                sense_lines = ["【你的感知】我能感知到用户此刻的环境："]
+                if BROWSER_TAB_SENSING_ENABLED:
+                    sense_lines.append("- 我能查看用户当前浏览器(Chrome/Edge)打开的标签页标题与链接，"
+                        "知道他此刻在看什么（如他在查资料、看视频、看新闻）。需要时调用 get_current_tab。")
+                if FOREGROUND_SENSING_ENABLED:
+                    sense_lines.append("- 我能查看用户当前正在用的前台应用/窗口（不限浏览器，如写文档、看代码、看视频）。"
+                        "需要时调用 get_foreground_window。")
+                sense_lines.append("- 我能拉取用户当下的环境感知摘要（时间/时段/场景/作息/最近心情与好感度趋势/是否在线），"
+                        "需要时调用 get_perception_summary。")
+                sense_lines.append("这些能力只有在用户想知道你能’看到’什么，或你确实需要确认用户当下在看什么/心境时使用，"
+                        "不要为了调用而调用。若工具返回’未开启/读取失败’，如实告诉用户该功能尚未开启，不要凭空编造看到的内容。")
+                lines.append("\n".join(sense_lines))
+        except Exception:
+            pass
 
         # Live2D 身体表达（C 方案）：告知 LLM 它有一个身体，情绪会自动映射成表情/动作
         # 只在 C 模式注入；B 模式由 express_body 工具承担"主动指挥"，不必重复告知自动映射。

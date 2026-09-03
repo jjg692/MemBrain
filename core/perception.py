@@ -25,6 +25,7 @@ from typing import Dict, List, Optional
 from core.config import (
     PROJECT_ROOT, PERCEPTION_FILE, PERCEPTION_CITY,
     MOOD_TREND_MAX_SAMPLES, ROUTINE_WINDOW_DAYS,
+    FOREGROUND_SENSING_ENABLED, FOREGROUND_SENSING_TIMEOUT,
 )
 
 _PERCEPTION_FILE = Path(PROJECT_ROOT) / "perception.json"
@@ -66,9 +67,55 @@ def _weekday_cn(now: datetime) -> str:
 
 # ===================== 2. 全局环境/系统感知 =====================
 
+def foreground_window() -> str:
+    """读取 Windows 用户当前聚焦的前台窗口文本（应用名 + 窗口标题）。
+
+    用 GetForegroundWindow + GetWindowTextW 取"真正在前台的窗口"，比 PowerShell
+    扫 MainWindowTitle 更准、更快。仅 Windows 且开关开启时可用；其他平台/失败返回空。
+    返回形如 "应用名：窗口标题"，或空串（不伪造）。
+    """
+    if not FOREGROUND_SENSING_ENABLED or sys.platform != "win32":
+        return ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        # 前台窗口句柄
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return ""
+        # 进程 id
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        # 窗口标题
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return ""
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        title = buf.value.strip()
+        if not title:
+            return ""
+        # 进程名（尽力）
+        app = ""
+        try:
+            import psutil
+            app = psutil.Process(pid.value).name()
+            if app.endswith(".exe"):
+                app = app[:-4]
+        except Exception:
+            app = ""
+        if app:
+            return f"{app}：{title}"
+        return title
+    except Exception:
+        return ""
+
+
 def system_situation() -> dict:
     """尽力读取系统状态；Windows 优先，失败则返回空字段（不伪造）"""
-    info = {"os": platform.system(), "runtime_sec": None, "active_app": None}
+    info = {"os": platform.system(), "runtime_sec": None, "active_app": None,
+            "foreground": None}
     # 系统运行时长（尽力）
     try:
         if sys.platform == "win32":
@@ -89,21 +136,34 @@ def system_situation() -> dict:
             info["runtime_sec"] = int(secs)
     except Exception:
         pass
-    # 前台活跃应用（Windows 尽力；失败置空）
-    try:
-        if sys.platform == "win32":
-            r = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "Get-Process | Where-Object {$_.MainWindowTitle -ne ''} | "
-                 "Sort-Object StartTime -Descending | Select-Object -First 1 -ExpandProperty MainWindowTitle"],
-                capture_output=True, text=True, timeout=4,
-                encoding="utf-8", errors="replace",
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                info["active_app"] = r.stdout.strip()
-    except Exception:
-        pass
+    # 前台窗口（Windows 原生，更准；失败置空）
+    info["foreground"] = foreground_window() or None
+    if info["foreground"]:
+        info["active_app"] = info["foreground"]
     return info
+
+
+
+
+def _current_tab_text() -> str:
+    """读取浏览器当前标签页文本；仅在感知开关开启且真读到内容时返回，否则空（不伪造）。
+    用 core.sensing.get_current_tab()，但过滤掉其返回的"未开启/读取失败/读取为空"标记。
+    """
+    try:
+        from core.sensing import get_current_tab
+        from core.config import ENVIRONMENT_SENSING_ENABLED
+        if not ENVIRONMENT_SENSING_ENABLED:
+            return ""
+        text = get_current_tab()
+        if not text:
+            return ""
+        if text.startswith(("（浏览器感知未开启", "（读取失败", "（读取为空")):
+            return ""
+        # 截断，避免塞进 prompt 过长
+        return text[:200]
+    except Exception:
+        return ""
+
 
 
 # ===================== 3. 位置与情境感知 =====================
@@ -391,8 +451,12 @@ class PerceptionManager:
         sysinfo = system_situation()
         if sysinfo.get("runtime_sec") is not None:
             parts.append(f"系统已运行约 {int(sysinfo['runtime_sec']//3600)} 小时")
-        if sysinfo.get("active_app"):
-            parts.append(f"用户当前可能在用：{sysinfo['active_app']}")
+        # 用户此刻在看什么：优先浏览器当前标签页（更具体），读不到则回退到前台窗口
+        tab_text = _current_tab_text()
+        if tab_text:
+            parts.append(tab_text)
+        elif sysinfo.get("foreground"):
+            parts.append(f"用户当前可能在用：{sysinfo['foreground']}")
         # 作息习惯
         routine = self.routine.summary(user_id)
         if routine["observed_days"]:

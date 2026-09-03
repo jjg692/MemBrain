@@ -40,6 +40,22 @@
 
 - 移除遗留的调试临时文件（`_m1.png` / `_m2.png` / `_m3.png` / `_m1.log.out`）。
 
+### 环境感知增强（浏览器 / 前台窗口 / 感知→表达）
+
+- **前台窗口感知（Windows 原生）**：用 `GetForegroundWindow` 替换原来不可靠的 PowerShell 注入，可读取当前正在用的应用+窗口标题（不限浏览器）。
+- **浏览器当前标签页（CDP）**：专用工具 `get_current_tab` 读当前标签页标题+链接（需浏览器以 `--remote-debugging-port` 启动）。
+- **环境感知工具组**：新增 `get_foreground_window` / `get_perception_summary`，与 `get_current_tab` 一起作为 LLM 可主动调用的工具（`/admin/config` 可配、可分别关闭）。
+- **感知→表达触发对齐**：前台/标签页变化时低频触发提示，让角色能自然接上一句。
+
+### Live2D 渲染角色管理 + 窗口贴合角色大小
+
+- **多角色多窗口**：追加渲染角色管理，可随角色切换加载不同 Live2D 模型，窗口尺寸自动贴合角色大小（行为与展示不再固定）。
+
+### M2 长程自主任务循环（plan→act→observe）
+
+- 晋级为长程自主：多步任务（如“查资料并写个总结”）由 `TaskPlanner` 生成骨架 plan，按 “计划→执行(工具)→观察→再回轮” 进行，简单一句话交流不回归。
+
+
 ---
 
 ## ✨ 核心能力
@@ -50,10 +66,10 @@
 | 👥 群聊 | 多角色同一房间，**接力对话**（角色按序发言并互相看到最新聊天，可配轮数） |
 | 🧠 五层记忆 | L1 内存 / L2 短期 / L3 信息池 / L4 事实 / L5 角色 |
 | 🔍 自治路由 | 无路由层/改写层，LLM 自主决定是否调用工具 |
-| 🛠️ 工具调用 | `search_web`（意图路由：Open-Meteo 天气/维基百科/百度/DuckDuckGo）、`control_pc`（打开应用/浏览器/文件/执行命令）、提醒/时间/文件等共 9 个工具 |
+| 🛠️ 工具调用 | `search_web`（意图路由：Open-Meteo 天气/维基百科/百度/DuckDuckGo）、`control_pc`（打开应用/浏览器/文件/执行命令）、提醒/时间/文件沙箱、环境感知工具（`get_current_tab`/`get_foreground_window`/`get_perception_summary`，可选开启） |
 | 💗 情感 / 好感度 | 模式 B 两阶段，6 维好感度跨会话持久化，好感度驱动**关系阶段**（陌生→熟悉→亲密→挚友） |
 | 🧬 关系记忆内核 | 持续存在的**自我模型** / **共同经历账本** / **情绪随时间衰减** / **周期反思**（异步沉淀对用户的理解与角色的内在状态，注入 system prompt） |
-| 🕒 感知层 | 时序/系统环境/位置情境/作息习惯/情绪趋势/忙碌在场/关系投入/作息异常 |
+| 🕒 感知层 | 时序/系统环境/位置情境/作息习惯/情绪趋势/忙碌在场/关系投入/作息异常；可选浏览器当前标签页/CDP视角（后台可配） |
 | ⏰ 日程提醒 | ReminderStore + 调度线程，到点调用 Agent 主动开口并 WS 推送（离线待上线补推） |
 | 🖥️ 后台管理 | 联系人/记忆/情感/统计/配置 一体管理 |
 
@@ -125,15 +141,41 @@ END
 | 感知 | 说明 |
 |------|------|
 | 时序 | 当前时间 / 星期 / 时段（早午晚深夜）/ 是否周末 |
-| 系统环境 | 操作系统 / 系统运行时长 / 前台活跃应用（尽力读取，读不到不伪造） |
+| 系统环境 | 操作系统 / 系统运行时长 / 前台窗口（Windows 原生 GetForegroundWindow，尽力读取，读不到不伪造） |
 | 位置情境 | 常驻城市（`PERCEPTION_CITY`）+ 从时段推导情境（工作/午休/自由/休息） |
 | 作息习惯 | 用户活跃时段聚合，得出"通常上午/下午/晚上活跃" |
 | 情绪趋势 | 历次情绪/好感度样本时间序列，算"心情变好/变差/平稳" |
 | 忙碌/在场 | 从距上次活跃推断"此刻是否在线/是否可能不在" |
 | 关系投入 | 断联天数 / 连续活跃天数，支持"想念/关心" |
 | 作息异常 | 当前处于用户通常安静时段 → 提示留意熬夜 |
+| 浏览器(CDP) | 当前浏览器标签页 标题+链接（需浏览器以 --remote-debugging-port 启动；后台可配） |
 
 > 数据存 `perception.json`，与 ChromaDB 解耦；由 `PERCEPTION_ENABLED`（默认开）控制。
+
+### 浏览器（CDP）感知配套配置（可选）
+
+想让角色看到你当前浏览器标签页（标题+链接），配置如下：
+
+1. **开启总开关**：`ENVIRONMENT_SENSING_ENABLED`（默认 `true`；后台「浏览器感知总开关」可切换）。
+2. **以调试模式启动浏览器**（只需一次）：
+   - Chrome：`chrome.exe --remote-debugging-port=9222`
+   - Edge：`msedge.exe --remote-debugging-port=9222`
+3. 必要时配置端口：`BROWSER_DEBUG_PORT`（后台可配，默认 `9222`）。
+
+未启动时不影响其他功能：角色仍能通过前台窗口感知看到你在用哪个应用；读不到标签页时如实说明，不伪造。
+
+### 环境感知工具（LLM 主动查询）
+
+除被动注入 system prompt 外，感知层还提供 3 个 **LLM 可主动调用**的工具（由 `ENVIRONMENT_SENSING_ENABLED` 总开关控制，默认开；工具组内每个工具也可单独开关，默认均开）：
+
+| 工具 | 作用 |
+|------|------|
+| `get_current_tab` | 读当前浏览器标签页 标题+链接（需 CDP 端口，见上） |
+| `get_foreground_window` | 读当前前台应用/窗口（Windows 原生，不限浏览器） |
+| `get_perception_summary` | 拉取一版最新的感知汇总（时序/场景/作息/心情趋势/是否在线） |
+
+**感知→表达触发对齐**（`sensing_hint`，默认开）：当用户前台窗口/浏览器标签页发生变化（且过冷却期，默认 60s）时，低频注入一句触发提示，让角色能自然地接上一句——落地“主动择时/感知共鸣”。关闭由 `SENSING_TRIGGER_ENABLED` 控制，按能力粒度三个工具分别有独立开关：`BROWSER_TAB_SENSING_ENABLED`（标签页）、`FOREGROUND_SENSING_ENABLED`（前台窗口）、`PERCEPTION_SUMMARY_SENSING_ENABLED`（感知摘要）。
+
 
 ---
 
@@ -309,6 +351,8 @@ agent-web-refactor/
 │   ├── assistant_tools.py     # 助手核心工具（提醒/时间/文件，沙箱）
 │   ├── reminder.py            # 日程/提醒引擎（存储 + 调度）
 │   ├── perception.py          # 感知层（时序/系统/情境/作息/情绪趋势）
+│   ├── sensing.py             # 环境感知工具（浏览器标签页 CDP / 前台窗口 / 感知摘要，LLM 可主动调用）
+│   ├── sensing_hint.py        # 感知→表达触发对齐（前台/标签页变化时低频提示）
 │   ├── user_profile.py        # 用户资料（昵称）
 │   ├── memory/                # 五层记忆（vector_store + memory_manager）
 │   ├── emotion/               # 情感 + 好感度（emotion / affection / emotion_store）
@@ -429,6 +473,12 @@ role_generator/
 | `PERCEPTION_FILE` | 感知数据（作息/情绪趋势）文件 | `perception.json` |
 | `MOOD_TREND_MAX_SAMPLES` | 情绪趋势保留样本数 | `200` |
 | `ROUTINE_WINDOW_DAYS` | 作息活跃窗口天数 | `30` |
+| `ENVIRONMENT_SENSING_ENABLED` | 环境感知工具组总开关（后台可配） | `true` |
+| `BROWSER_DEBUG_PORT` | 浏览器远程调试端口 | `9222` |
+| `BROWSER_TAB_SENSING_ENABLED` | 标签页感知单独开关 | `true` |
+| `FOREGROUND_SENSING_ENABLED` | 前台窗口感知开关 | `true` |
+| `PERCEPTION_SUMMARY_SENSING_ENABLED` | 感知摘要工具（get_perception_summary）开关 | `true` |
+| `SENSING_TRIGGER_ENABLED` | 感知→表达触发提示开关 | `true` |
 | `ASSISTANT_WORKSPACE_DIR` | 助手文件工具沙箱根目录 | `assistant_workspace` |
 | `LIVE2D_ENABLED` | 启用 Live2D 桌面宠物页/接口 | `true` |
 | `LIVE2D_MODEL_ROOT` | Live2D 模型根目录（扫描含 `model.json` 的目录即一个模型） | `live2d` |

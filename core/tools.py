@@ -434,6 +434,22 @@ TOOL_REGISTRY = {
 if _ASSISTANT_AVAILABLE:
     TOOL_REGISTRY.update(ASSISTANT_TOOL_REGISTRY)
 
+# 环境感知工具（LLM 主动查询）：当前浏览器标签页 / 感知摘要。
+# 由 ENVIRONMENT_SENSING_ENABLED 总开关控制（默认关闭）。仅开关开启时才注册暴露给 LLM，
+# 且 get_current_tab 需浏览器开启远程调试端口，读不到时如实返回不可用（不伪造）。
+try:
+    from core.config import ENVIRONMENT_SENSING_ENABLED
+except Exception:
+    ENVIRONMENT_SENSING_ENABLED = False
+if ENVIRONMENT_SENSING_ENABLED:
+    try:
+        from core.sensing import SENSING_TOOLS_SCHEMA, SENSING_TOOL_REGISTRY
+        ALL_TOOLS = ALL_TOOLS + list(SENSING_TOOLS_SCHEMA)
+        TOOL_REGISTRY.update(SENSING_TOOL_REGISTRY)
+    except Exception:
+        pass
+
+
 # Live2D 身体表达（B 方案）：LLM 主动指挥身体。
 # 仅在 LIVE2D_BODY_MODE=B 时注册 express_body 工具；C 方案无需工具（由内核自动映射）。
 try:
