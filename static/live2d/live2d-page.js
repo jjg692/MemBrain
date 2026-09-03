@@ -632,13 +632,10 @@
     } catch (e) {}
   }
   function applyT() {
-    // petmode：模型跟随窗口拉伸（canvas 100vw/100vh），页内不做 CSS 变换，保持恒等
-    if (state.petmode) {
-      l2dCanvases().forEach(function (c) {
-        c.style.transform = "";
-      });
-      return;
-    }
+    // 所有模式都用 CSS transform 缩放/平移 canvas（对 canvas 元素做等比缩放，
+    // 不改窗口物理尺寸、不改 L2Dwidget 画布 buffer，因此不会拉伸变形。
+    // petmode 下窗口整窗拖动由 Qt 负责，这里只做 model 的 scale 缩放（滚轮），
+    // transform-origin 在 CSS 里设为 50% 50%，以角色中心缩放，用于填充左右留白。）
     l2dCanvases().forEach(function (c) {
       c.style.transform = "translate(" + live2dT.x + "px," + live2dT.y + "px) scale(" + live2dT.s + ")";
     });
@@ -742,12 +739,11 @@
     // 所以 wheel 监听绑到 window 上，任意位置滚轮都能缩放。
     window.addEventListener("wheel", function (e) {
       e.preventDefault();
-      // petmode（桌面宠物透明窗）：不做滚轮缩放窗口——L2Dwidget 用固定像素画布、
-      // 不响应 resize，运行时改窗口会被 CSS 拉伸导致角色变形、点击错位。
-      // 角色大小由后台「渲染角色管理」配置的窗口尺寸/模型缩放决定。
-      if (state.petmode) return;
+      // 滚轮缩放模型：所有模式（含 petmode 桌面宠物窗）都用 CSS transform 等比缩放
+      // canvas（live2dT.s），不改窗口物理尺寸、不改 L2Dwidget 画布 buffer，故不会变形。
+      // 用来调整角色在窗口内的大小、填充左右留白。缩放以 canvas 中心为原点（CSS 已设 50% 50%）。
       var factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-      live2dT.s = Math.min(5, Math.max(0.2, live2dT.s * factor));
+      live2dT.s = Math.min(5, Math.max(0.3, live2dT.s * factor));
       applyT();
       bus.emit("scale", { scale: live2dT.s });
     }, { passive: false });

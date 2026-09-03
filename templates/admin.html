@@ -10,10 +10,13 @@
   header { background:#fff; padding:16px 28px; box-shadow:0 1px 4px rgba(0,0,0,.08); display:flex; align-items:center; gap:16px; }
   header h1 { font-size:18px; }
   header a { color:#07c160; text-decoration:none; font-size:13px; margin-left:auto; }
-  .container { max-width:1100px; margin:24px auto; padding:0 20px; }
-  .tabs { display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; }
-  .tab { padding:8px 18px; background:#fff; border-radius:6px; cursor:pointer; font-size:14px; border:1px solid #e0e0e0; }
-  .tab.active { background:#07c160; color:#fff; border-color:#07c160; }
+  .container { max-width:1240px; margin:0 auto; display:flex; align-items:flex-start; min-height:calc(100vh - 62px); }
+  .sidebar { flex:0 0 188px; width:188px; background:#fff; border-right:1px solid #e8e8e8; padding:10px 0 14px; position:sticky; top:0; height:calc(100vh - 62px); overflow-y:auto; box-shadow:1px 0 5px rgba(0,0,0,.04); }
+  .snav-item { display:flex; align-items:center; gap:10px; padding:12px 20px; cursor:pointer; font-size:14px; color:#444; border-left:3px solid transparent; user-select:none; }
+  .snav-item:hover { background:#f6f6f6; }
+  .snav-item.active { background:#eafaf0; color:#07c160; border-left-color:#07c160; font-weight:600; }
+  .snav-sep { height:1px; background:#f0f0f0; margin:8px 14px; }
+  .content { flex:1; min-width:0; padding:22px 26px; }
   .panel { display:none; }
   .panel.active { display:block; }
   .card { background:#fff; border-radius:8px; padding:20px; margin-bottom:16px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
@@ -63,18 +66,24 @@
   <a href="/">← 返回聊天</a>
 </header>
 <div class="container">
-  <div class="tabs">
-    <div class="tab active" data-panel="roles">联系人管理</div>
-    <div class="tab" data-panel="memory">记忆查看</div>
-    <div class="tab" data-panel="emotion">情感 / 好感度</div>
-    <div class="tab" data-panel="relation">关系记忆</div>
-    <div class="tab" data-panel="stats">系统统计</div>
-    <div class="tab" data-panel="llm">LLM 管理</div>
-    <div class="tab" data-panel="config">配置管理</div>
+  <div class="sidebar">
+    <div class="snav-sep"></div>
+    <div class="snav-item" data-panel="roles">🧑‍🤝‍🧑 联系人管理</div>
+    <div class="snav-item active" data-panel="render">🎬 渲染管理</div>
+    <div class="snav-item" data-panel="model">🧩 模型管理</div>
+    <div class="snav-sep"></div>
+    <div class="snav-item" data-panel="memory">🗂️ 记忆查看</div>
+    <div class="snav-item" data-panel="emotion">💗 情感 / 好感度</div>
+    <div class="snav-item" data-panel="relation">🔗 关系记忆</div>
+    <div class="snav-sep"></div>
+    <div class="snav-item" data-panel="stats">📊 系统统计</div>
+    <div class="snav-item" data-panel="llm">🤖 LLM 管理</div>
+    <div class="snav-item" data-panel="config">⚙️ 配置管理</div>
   </div>
+  <div class="content">
 
   <!-- ===== 联系人管理 ===== -->
-  <div class="panel active" id="panel-roles">
+  <div class="panel" id="panel-roles">
     <div class="card">
       <h3>角色列表</h3>
       <table id="rolesTable">
@@ -92,6 +101,30 @@
       <label>Prompt 内容</label>
       <textarea id="newRolePrompt" style="min-height:120px"></textarea>
       <div style="margin-top:12px"><button class="btn btn-green" onclick="createRole()">创建角色</button></div>
+    </div>
+  </div>
+
+  <!-- ===== 渲染管理 ===== -->
+  <div class="panel active" id="panel-render">
+    <div class="card">
+      <h3>渲染角色管理</h3>
+      <p class="hint" style="margin-bottom:12px">开启的角色会在桌面宠物中各自打开独立窗口渲染。默认角色（⭐ 看板娘）始终渲染且不可关闭，其余角色通过下方开关控制。</p>
+      <table id="renderTable">
+        <thead><tr><th>角色</th><th>默认</th><th>渲染状态</th><th>开关</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ===== 模型管理 ===== -->
+  <div class="panel" id="panel-model">
+    <div class="card">
+      <h3>角色 × Live2D 模型绑定</h3>
+      <p class="hint" style="margin-bottom:12px">为每个渲染角色选择对应的 Live2D 模型目录（角色与模型一一对应）。切换模型后，该角色的已打开窗口会自动重新加载。</p>
+      <table id="modelTable">
+        <thead><tr><th>角色</th><th>当前模型</th><th>选择模型</th></tr></thead>
+        <tbody></tbody>
+      </table>
     </div>
   </div>
 
@@ -201,8 +234,8 @@
       </table>
     </div>
   </div>
+  </div><!-- /content -->
 </div>
-<div class="toast" id="toast"></div>
 
 <!-- Live2D 模型选择弹框 -->
 <div class="modal-mask" id="l2dModal">
@@ -224,13 +257,17 @@ const $ = id => document.getElementById(id);
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2000); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-// ===== Tabs =====
-document.querySelectorAll('.tab').forEach(tab=>{
+// ===== Tabs（侧边栏导航） =====
+document.querySelectorAll('.snav-item').forEach(tab=>{
   tab.onclick=()=>{
-    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.snav-item').forEach(t=>t.classList.remove('active'));
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
     tab.classList.add('active');
     $('panel-'+tab.dataset.panel).classList.add('active');
+    // 惰性加载：进入面板时刷新数据
+    const p=tab.dataset.panel;
+    if(p==='render') loadRenderRoles();
+    if(p==='model') loadModelRows();
   };
 });
 
@@ -244,10 +281,12 @@ async function loadRoles(){
       <td>${esc(r.role_id)}</td>
       <td>${esc(r.display_name)}</td>
       <td>${r.default?'⭐ 默认':'<button class="btn btn-gray" onclick="setDefault(\''+r.role_id+'\')">设为默认</button>'}</td>
-      <td>${r.rendered
-            ?'<span style="color:#07c160">● 渲染中</span>'
-            :'<button class="btn btn-gray" onclick="setRender(\''+r.role_id+'\',true)">开放渲染</button>'}
-        ${r.default?'<div style="font-size:11px;color:#999">看板娘(默认)恒渲染</div>':''}
+      <td>
+        ${r.default
+          ?'<span style="color:#07c160">● 看板娘</span><div style="font-size:11px;color:#999">默认角色恒渲染</div>'
+          :(r.rendered
+            ?'<button class="btn btn-red" onclick="setRender(\''+r.role_id+'\',false)">关闭渲染</button>'
+            :'<button class="btn btn-green" onclick="setRender(\''+r.role_id+'\',true)">开放渲染</button>')}
       </td>
       <td>${r.avatar?'<img src="'+r.avatar_url+'" style="width:30px;height:30px;border-radius:4px" onerror="this.style.display=\'none\'">':'无'}</td>
       <td style="min-width:220px">
@@ -286,8 +325,81 @@ async function setDefault(roleId){
 async function setRender(roleId, enabled){
   const res=await fetch(`/admin/roles/${roleId}/render`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({render_enabled:enabled})});
   const json=await res.json();
-  toast(json.message+(`（${json.rendered?'渲染中':'已关闭'}）`)); loadRoles();
+  toast(json.message+(`（${json.rendered?'渲染中':'已关闭'}）`)); loadRoles(); loadRenderRoles();
 }
+
+// ===== 渲染管理（单开关，默认角色恒开启） =====
+async function loadRenderRoles(){
+  const res=await fetch('/admin/roles'); const json=await res.json();
+  const tbody=document.querySelector('#renderTable tbody'); if(!tbody) return;
+  tbody.innerHTML='';
+  (json.data||[]).forEach(r=>{
+    const isDefault=!!r.default;
+    const on=isDefault?true:!!r.rendered; // 默认角色恒渲染
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td style="font-weight:600">${esc(r.display_name)}<div style="font-weight:400;color:#999;font-size:12px">${esc(r.role_id)}</div></td>
+      <td>${isDefault?'⭐ 默认（看板娘）':'—'}</td>
+      <td>${on?'<span style="color:#07c160;font-weight:600">● 渲染中</span>':'<span style="color:#999">○ 未渲染</span>'}</td>
+      <td>
+        ${isDefault
+          ?'<button class="btn btn-green" disabled style="opacity:.9">恒渲染（默认角色）</button>'
+          :`<button class="btn ${on?'btn-red':'btn-green'}" onclick="setRender('${r.role_id}',${on?'false':'true'})">${on?'关闭渲染':'开启渲染'}</button>`}
+      </td>`;
+    tbody.appendChild(tr);
+  });
+  if(!(json.data||[]).length) tbody.innerHTML='<tr><td colspan="4" class="hint">暂无角色</td></tr>';
+}
+
+// ===== 模型管理（角色 ↔ 对应的 Live2D 模型绑定） =====
+async function loadModelRows(){
+  const res=await fetch('/admin/roles'); const json=await res.json();
+  const tbody=document.querySelector('#modelTable tbody'); if(!tbody) return;
+  tbody.innerHTML='';
+  (json.data||[]).forEach(r=>{
+    const tr=document.createElement('tr');
+    const rendered=r.rendered?'<span style="color:#07c160">●</span>':'';
+    tr.innerHTML=`
+      <td style="font-weight:600">${esc(r.display_name)} ${rendered}<div style="font-weight:400;color:#999;font-size:12px">${esc(r.role_id)}${r.default?' · 默认':''}</div></td>
+      <td>
+        <div id="modelpath_${r.role_id}" style="font-size:12px;color:#555;word-break:break-all">${esc(r.live2d_model||'')||'<span style="color:#bbb">（未设置 · 用全局默认）</span>'}</div>
+        <button class="btn btn-gray" style="margin-top:4px" onclick="pickModel('${r.role_id}')">选择模型…</button>
+        <button class="btn btn-gray" style="margin-top:4px" onclick="clearModel('${r.role_id}')" title="清空，回退全局默认">清除</button>
+      </td>
+      <td><button class="btn btn-blue" onclick="pickModel('${r.role_id}')">选择</button></td>`;
+    tbody.appendChild(tr);
+  });
+  if(!(json.data||[]).length) tbody.innerHTML='<tr><td colspan="3" class="hint">暂无角色</td></tr>';
+}
+// 模型选择复用 Live2D 浏览弹框
+async function pickModel(roleId){
+  l2dPickRole=roleId; l2dPickSel='';
+  try{
+    const res=await fetch(`/admin/live2d/models?role_id=${encodeURIComponent(roleId)}`); const json=await res.json();
+    l2dCandidates=json.data||[]; l2dFilterDir=json.filter_dir||'';
+  }catch(e){ l2dCandidates=[]; l2dFilterDir=''; }
+  const body=$('l2dModalBody'); body.innerHTML='';
+  if(l2dFilterDir){
+    const tip=document.createElement('p'); tip.className='hint'; tip.style.marginBottom='10px';
+    tip.textContent='当前角色目录：'+l2dFilterDir+'（仅显示该角色的模型）'; body.appendChild(tip);
+  }
+  if(!l2dCandidates.length){
+    body.innerHTML+='<p class="hint">未发现属于该角色的 Live2D 模型。</p>';
+  }else{
+    l2dCandidates.forEach(m=>{
+      const div=document.createElement('div'); div.className='l2d-item';
+      div.dataset.path=m.path||m.id;
+      div.innerHTML=`<div class="l2d-name">${esc(m.name||m.id)}</div><div class="l2d-path">${esc(m.path||m.id)}</div>`;
+      div.onclick=()=>{
+        $('l2dModalBody').querySelectorAll('.l2d-item').forEach(x=>x.classList.remove('selected'));
+        div.classList.add('selected'); l2dPickSel=div.dataset.path;
+      };
+      body.appendChild(div);
+    });
+  }
+  $('l2dModal').classList.add('show');
+}
+async function clearModel(roleId){ await saveRoleLive2d(roleId, ''); loadModelRows(); }
 
 async function deleteRole(roleId){
   if(!confirm('确定删除角色 '+roleId+' ？（会删除 Prompt 文件和头像）'))return;
@@ -358,7 +470,7 @@ async function confirmL2dPick(){
 async function clearLive2d(roleId){ await saveRoleLive2d(roleId, ''); }
 async function saveRoleLive2d(roleId, path){
   const res=await fetch(`/admin/roles/${roleId}/live2d`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({live2d_model:path})});
-  toast((await res.json()).message); loadRoles();
+  toast((await res.json()).message); loadRoles(); loadModelRows();
 }
 
 // ===== 记忆查看 =====
@@ -575,8 +687,10 @@ async function saveLLM(){
 }
 
 // ===== 初始化 =====
-loadRoles(); loadStats(); loadConfig(); loadLLM();
+loadRoles(); loadRenderRoles(); loadStats(); loadConfig(); loadLLM();
 setInterval(loadStats, 5000);
+// 轮询：渲染角色变化（多主机对齐）时自动刷新渲染面板
+setInterval(function(){ const p=document.querySelector('.snav-item.active'); if(p&&p.dataset.panel==='render') loadRenderRoles(); }, 3000);
 </script>
 </body>
 </html>
