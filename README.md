@@ -36,6 +36,13 @@
 - 实现为 Python MCP 服务器（官方 `mcp` SDK）+ SMAPI Mod（C#），Mod 与服务器经本地 TCP(24642)+protobuf+共享密钥握手；安装/启用见 `stardew/README.md`
 - 完整说明见 `stardew/README.md`（架构 / 启用步骤 / 依赖环境）
 
+**启用步骤（简明版）**：
+
+1. **安装 MCP 服务器**（需 `uv`）：`git clone https://github.com/luy-0/StardewValley-MCP luy0 && cd luy0 && uv tool install ./mcp && stardew-valley-mcp doctor`
+2. **部署 SMAPI Mod**：从 [Releases](https://github.com/luy-0/StardewValley-MCP/releases) 下载 `StardewValleyMCP-Mod-v*.zip`（或源码 `./mod/scripts/build.sh --deploy`）解压到游戏 `Mods/`，用 SMAPI 启动并加载存档。Mod 首次启动会在 `Mods/StardewValleyMCP/config.json` 生成监听地址与随机 `SharedSecretBase64`。
+3. **填密钥**：把 Mod `config.json` 的 `SharedSecretBase64` 填入 `config/mcp.json` 的 `STARDEW_VALLEY_MCP_SHARED_SECRET`（`command`=`stardew-valley-mcp`，`args` 只读 `["serve"]` / 可操作 `["serve","--allow-write"]`）。
+4. **打开开关并重启**：`.env` 写 `STARDEW_MCP_ENABLED=true`，然后 `python web_app.py`。
+
 ### 其他
 
 - 移除遗留的调试临时文件（`_m1.png` / `_m2.png` / `_m3.png` / `_m1.log.out`）。
