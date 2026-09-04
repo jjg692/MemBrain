@@ -32,8 +32,8 @@
 
 新增可选的「星露谷物语 MCP」扩展，让宠物感知并参与星露谷游戏世界（读游戏状态/进游戏当同伴/记忆反写/多 agent 小队）。**默认关闭**（`STARDEW_MCP_ENABLED=false`），不影响不玩星露谷的用户；想启用只需在后台或 `.env` 打开开关。
 
-- **引用的 git 仓库**：[amarisaster/StardewValley-MCP](https://github.com/amarisaster/StardewValley-MCP)（MIT 协议，共 25 个 `mcp_stardew_*` 工具）
-- 本地已含该仓库源码副本：`stardew/StardewValley-MCP/`（含 `mcp-server/` Node.js MCP server 与 `smapi-mod/` SMAPI 模组）
+- **引用的 git 仓库**：[luy-0/StardewValley-MCP](https://github.com/luy-0/StardewValley-MCP)（Apache-2.0，22 个工具：6 只读 + 16 操作）
+- 实现为 Python MCP 服务器（官方 `mcp` SDK）+ SMAPI Mod（C#），Mod 与服务器经本地 TCP(24642)+protobuf+共享密钥握手；安装/启用见 `stardew/README.md`
 - 完整说明见 `stardew/README.md`（架构 / 启用步骤 / 依赖环境）
 
 ### 其他
@@ -175,6 +175,17 @@ END
 | `get_perception_summary` | 拉取一版最新的感知汇总（时序/场景/作息/心情趋势/是否在线） |
 
 **感知→表达触发对齐**（`sensing_hint`，默认开）：当用户前台窗口/浏览器标签页发生变化（且过冷却期，默认 60s）时，低频注入一句触发提示，让角色能自然地接上一句——落地“主动择时/感知共鸣”。关闭由 `SENSING_TRIGGER_ENABLED` 控制，按能力粒度三个工具分别有独立开关：`BROWSER_TAB_SENSING_ENABLED`（标签页）、`FOREGROUND_SENSING_ENABLED`（前台窗口）、`PERCEPTION_SUMMARY_SENSING_ENABLED`（感知摘要）。
+
+### 本地视觉感知（可选，默认关）
+
+主模型是纯文本，无视觉模态。为让它"间接看图"，可用本地 Ollama 多模态模型（`VISION_MODEL`，如 `qwen2.5-vl:7b`）把图片/屏幕转成中文描述后注入主模型：
+
+| 场景 | 说明 | 开关 |
+|------|------|------|
+| A：对话图 | 用户发的图片经视觉模型转述 | `VISION_IN_CHAT`（默认开） |
+| B：桌面窗口 | 屏幕/当前窗口识别，作为前台活跃感知的补充 | `VISION_SCREEN_ON_DEMAND`（默认关） |
+
+由总开关 `VISION_ENABLED` 控制（默认 `false`）。未启用/本地无模型/读取失败时返回空，主模型**不伪造**"看到了"。
 
 
 ---
@@ -479,6 +490,13 @@ role_generator/
 | `FOREGROUND_SENSING_ENABLED` | 前台窗口感知开关 | `true` |
 | `PERCEPTION_SUMMARY_SENSING_ENABLED` | 感知摘要工具（get_perception_summary）开关 | `true` |
 | `SENSING_TRIGGER_ENABLED` | 感知→表达触发提示开关 | `true` |
+| `VISION_ENABLED` | 本地视觉感知总开关（Ollama多模态→文本） | `false` |
+| `VISION_MODEL` | 本地 Ollama 视觉模型名 | `qwen2.5-vl:7b` |
+| `VISION_IN_CHAT` | 对话图片识别 | `true` |
+| `VISION_SCREEN_ON_DEMAND` | 桌面窗口识别（感知补充） | `false` |
+| `PROACTIVITY_ENABLED` | 主动性心跳（低频主动开口）总开关 | `false` |
+| `PROACTIVITY_MIN_INTERVAL_MIN` | 主动最小间隔（分钟） | `30` |
+| `PROACTIVITY_DAILY_CAP` | 每日主动次数上限（0=不限） | `8` |
 | `ASSISTANT_WORKSPACE_DIR` | 助手文件工具沙箱根目录 | `assistant_workspace` |
 | `LIVE2D_ENABLED` | 启用 Live2D 桌面宠物页/接口 | `true` |
 | `LIVE2D_MODEL_ROOT` | Live2D 模型根目录（扫描含 `model.json` 的目录即一个模型） | `live2d` |

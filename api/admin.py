@@ -334,9 +334,9 @@ def setup_admin(app):
         # 先检查扩展是否开启、工具是否注册
         try:
             from core.tools import TOOL_REGISTRY
-            has_tools = any(k.startswith("mcp_") and k.endswith("get_state") for k in TOOL_REGISTRY)
-            state_tool = next((k for k in TOOL_REGISTRY
-                               if k.startswith("mcp_") and k.endswith("get_state")), None)
+            from stardew.runtime import is_state_tool_name
+            has_tools = any(is_state_tool_name(k) for k in TOOL_REGISTRY)
+            state_tool = next((k for k in TOOL_REGISTRY if is_state_tool_name(k)), None)
         except Exception:
             has_tools, state_tool = False, None
         if not has_tools or not state_tool:

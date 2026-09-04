@@ -19,9 +19,8 @@ from typing import Dict, List, Optional
 
 from core.config import PROJECT_ROOT
 
-# MCP JSON-RPC 版本
-_MCP_VERSION = "2024-11-05"
-_PROTOCOL_VERSION = "0.1.0"
+# MCP JSON-RPC 版本（客户端发送标准协议版本，未发送时允许服务器协商）
+_PROTOCOL_VERSION = "2024-11-05"
 
 
 class McpError(Exception):

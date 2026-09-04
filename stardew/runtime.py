@@ -17,6 +17,21 @@ from typing import Dict, Optional
 from core.logger import log_info, log_debug, log_error
 
 
+def is_state_tool_name(tool_name) -> bool:
+    """判断 MCP 工具名是否为读取星露谷状态的只读工具。
+    适配两类服务的只读工具名： luy-0(query_*) 和 amarisaster(get_state)。
+    """
+    if not (tool_name or "").startswith("mcp_"):
+        return False
+    return (tool_name.endswith("query_runtime")
+            or tool_name.endswith("query_world")
+            or tool_name.endswith("query_players")
+            or tool_name.endswith("query_inventory")
+            or tool_name.endswith("query_ui")
+            or tool_name.endswith("inspect")
+            or tool_name.endswith("get_state"))
+
+
 class GameStatePoller:
     """周期性读取星露谷游戏状态并沉淀记忆。"""
 
@@ -61,7 +76,7 @@ class GameStatePoller:
         try:
             from core.tools import TOOL_REGISTRY
             for k in TOOL_REGISTRY:
-                if k.startswith("mcp_") and k.endswith("get_state"):
+                if is_state_tool_name(k):
                     return k
         except Exception:
             pass
