@@ -160,14 +160,19 @@ def get_current_tab() -> str:
 
 
 def get_perception_summary() -> str:
-    """harness 工具：拉取一次用户当下感知汇总（时序/情境/作息/情绪趋势）。"""
+    """harness 工具：拉取一次用户当下感知汇总（时序/情境/作息/情绪趋势）。
+
+    二(B) 优化：返回比被动注入 system prompt 的"精简版"更细的详细版
+    （summarize_detailed，追加活跃明细/作息明细/情绪样本数/滚动帧趋势），
+    并带短 TTL 缓存，真正兑现"比已有上下文更新"的空头承诺，同时避免重复 IO。
+    """
     if not PERCEPTION_SUMMARY_SENSING_ENABLED:
         return "（感知摘要未开启）感知摘要工具已关闭。"
     pm = _perception_manager
     if pm is None:
         return "（感知不可用）感知层未启用。"
     try:
-        text = pm.summarize(_perception_user_id)
+        text = pm.summarize_detailed(_perception_user_id)
         if not text:
             return "（感知为空）当前没有可汇总的感知信息。"
         return text

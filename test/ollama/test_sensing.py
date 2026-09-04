@@ -41,15 +41,17 @@ def _reset_cache():
 
 
 def test_is_content_tab_filters_noise():
-    """只认可"当前激活的内容标签页"；chrome://、新标签页、非 page、非激活一律剔除。"""
+    """内容页判定：chrome://、新标签页、非 page、空标题一律剔除；
+    不把 active 当硬性条件（独立 user-data-dir 调试实例 active 常为空）。"""
     assert s._is_content_tab({"type": "page", "url": "https://a.com/x",
                               "title": "标题 - 站", "active": True}) is True
     assert s._is_content_tab({"type": "page", "url": "chrome://settings",
                               "title": "设置", "active": True}) is False
     assert s._is_content_tab({"type": "page", "url": "https://a.com",
                               "title": "新标签页", "active": True}) is False
+    # active 不再是硬性条件：独立调试实例里 active 常为空，只要是可读内容页即可
     assert s._is_content_tab({"type": "page", "url": "https://a.com",
-                              "title": "标题", "active": False}) is False
+                              "title": "标题", "active": False}) is True
     assert s._is_content_tab({"type": "other", "url": "https://a.com",
                               "title": "t", "active": True}) is False
     assert s._is_content_tab({"type": "page", "url": "about:blank",

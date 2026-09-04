@@ -137,6 +137,10 @@ PERCEPTION_FILE = str(Path(PROJECT_ROOT) / os.getenv("PERCEPTION_FILE", "percept
 # 情绪趋势保留的样本数 / 活跃时段窗口天数
 MOOD_TREND_MAX_SAMPLES = _int(os.getenv("MOOD_TREND_MAX_SAMPLES"), 200)
 ROUTINE_WINDOW_DAYS = _int(os.getenv("ROUTINE_WINDOW_DAYS"), 30)
+# 感知 prompt 总字符上限(system prompt 防撑爆)：超限时按优先级裁剪低价值项
+PERCEPTION_PROMPT_MAX_CHARS = _int(os.getenv("PERCEPTION_PROMPT_MAX_CHARS", "500"), 500)
+# 系统 boot-time 缓存 TTL(秒)：PowerShell 查询慢且启动帧/运行时长变化很慢，缓存避免每轮 4s 卡顿
+PERCEPTION_SYSTEM_CACHE_TTL = _float(os.getenv("PERCEPTION_SYSTEM_CACHE_TTL", "300"), 300.0)
 
 # ===================== 环境感知工具（LLM 主动查询） =====================
 # 总开关：注册并暴露给 LLM 的"环境感知工具"（标签页 / 前台窗口 / 感知摘要）。
@@ -162,6 +166,32 @@ FOREGROUND_SENSING_ENABLED = _bool(os.getenv("FOREGROUND_SENSING_ENABLED", "true
 FOREGROUND_SENSING_TIMEOUT = _float(os.getenv("FOREGROUND_SENSING_TIMEOUT", "2"), 2.0)
 # 感知→表达触发对齐：前台/标签页变化时给低频触发提示。默认开（需总开关也开才生效）。
 SENSING_TRIGGER_ENABLED = _bool(os.getenv("SENSING_TRIGGER_ENABLED", "true"))
+# 滚动帧趋势感知：内存中保留最近多少帧环境快照（前台窗口/标签页），
+# 用于说出"你刚才从 X 切到了 Y / 你一直专注在 Z"这类跨帧趋势。0=关闭滚动帧。
+SENSING_FRAME_WINDOW = _int(os.getenv("SENSING_FRAME_WINDOW", "8"), 8)
+
+# ===================== 本地视觉感知（Ollama 多模态 → 文本描述） =====================
+# 让纯文本主模型"间接看图"：用本地 Ollama 视觉模型把图/屏幕转成中文描述后注入主模型。
+# 默认全关：本地无视觉模型时不影响既有行为；主模型不会伪造"看到了"。
+VISION_ENABLED = _bool(os.getenv("VISION_ENABLED", "false"))
+# 本地 Ollama 视觉模型名（如 qwen2.5-vl:7b / minicpm-v / llama3.2-vision:11b）
+VISION_MODEL = os.getenv("VISION_MODEL", "qwen2.5-vl:7b").strip()
+# 场景 A：对话中识别用户发的图片
+VISION_IN_CHAT = _bool(os.getenv("VISION_IN_CHAT", "true"))
+# 场景 B：桌面窗口识别（感知层"电脑当前活跃"的补充；默认关）
+VISION_SCREEN_ON_DEMAND = _bool(os.getenv("VISION_SCREEN_ON_DEMAND", "false"))
+# 视觉模型推断超时（秒）
+VISION_TIMEOUT = _float(os.getenv("VISION_TIMEOUT", "20"), 20.0)
+
+# ===================== 主动性心跳（低频、克制的主动开口判断） =====================
+# 总开关：默认关闭（避免打扰）。开启后由 ProactiveDecider 综合信号决定是否主动。
+PROACTIVITY_ENABLED = _bool(os.getenv("PROACTIVITY_ENABLED", "false"))
+# 主动最小间隔（分钟）：两次主动间最少间隔
+PROACTIVITY_MIN_INTERVAL_MIN = _int(os.getenv("PROACTIVITY_MIN_INTERVAL_MIN", "30"), 30)
+# 每日主动次数上限（0=不限）
+PROACTIVITY_DAILY_CAP = _int(os.getenv("PROACTIVITY_DAILY_CAP", "8"), 8)
+
+
 
 
 # ===================== 关系记忆内核（自我模型 / 共同经历 / 情绪衰减） =====================
@@ -226,9 +256,19 @@ EDITABLE_KEYS = {
     "ENVIRONMENT_SENSING_ENABLED": ("浏览器感知（标签页/前台窗口/摘要）总开关", "bool", ENVIRONMENT_SENSING_ENABLED),
     "BROWSER_DEBUG_PORT": ("浏览器远程调试端口", "int", BROWSER_DEBUG_PORT),
     "BROWSER_TAB_SENSING_ENABLED": ("标签页感知（读当前浏览器标签）", "bool", BROWSER_TAB_SENSING_ENABLED),
+    "PERCEPTION_PROMPT_MAX_CHARS": ("感知 prompt 总字符上限", "int", PERCEPTION_PROMPT_MAX_CHARS),
+    "PERCEPTION_SYSTEM_CACHE_TTL": ("系统感知缓存 TTL(秒)", "float", PERCEPTION_SYSTEM_CACHE_TTL),
     "FOREGROUND_SENSING_ENABLED": ("前台窗口感知（读当前前台应用）", "bool", FOREGROUND_SENSING_ENABLED),
     "PERCEPTION_SUMMARY_SENSING_ENABLED": ("感知摘要工具（get_perception_summary）", "bool", PERCEPTION_SUMMARY_SENSING_ENABLED),
     "SENSING_TRIGGER_ENABLED": ("感知→表达触发提示", "bool", SENSING_TRIGGER_ENABLED),
+    "SENSING_FRAME_WINDOW": ("滚动帧趋势感知窗口(0=关)", "int", SENSING_FRAME_WINDOW),
+    "PROACTIVITY_ENABLED": ("主动性心跳（低频主动开口）", "bool", PROACTIVITY_ENABLED),
+    "PROACTIVITY_MIN_INTERVAL_MIN": ("主动最小间隔（分钟）", "int", PROACTIVITY_MIN_INTERVAL_MIN),
+    "PROACTIVITY_DAILY_CAP": ("每日主动次数上限", "int", PROACTIVITY_DAILY_CAP),
+    "VISION_ENABLED": ("本地视觉感知总开关（Ollama多模态→文本）", "bool", VISION_ENABLED),
+    "VISION_MODEL": ("本地视觉模型名", "str", VISION_MODEL),
+    "VISION_IN_CHAT": ("对话图片识别", "bool", VISION_IN_CHAT),
+    "VISION_SCREEN_ON_DEMAND": ("桌面窗口识别（感知补充）", "bool", VISION_SCREEN_ON_DEMAND),
 }
 
 

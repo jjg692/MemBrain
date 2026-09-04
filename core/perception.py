@@ -26,9 +26,15 @@ from core.config import (
     PROJECT_ROOT, PERCEPTION_FILE, PERCEPTION_CITY,
     MOOD_TREND_MAX_SAMPLES, ROUTINE_WINDOW_DAYS,
     FOREGROUND_SENSING_ENABLED, FOREGROUND_SENSING_TIMEOUT,
+    PERCEPTION_PROMPT_MAX_CHARS, PERCEPTION_SYSTEM_CACHE_TTL,
 )
 
 _PERCEPTION_FILE = Path(PROJECT_ROOT) / "perception.json"
+
+# 系统 boot-time 缓存（第 5 项优化）：PowerShell 查 LastBootUpTime 慢（约 4s），
+# 而系统运行时长变化很慢，短期缓存避免每轮 summarize 都卡一次。仅缓存慢的 OS 时长查询，
+# 前台窗口是高动态信号（不作为缓存，靠 sensing_hint 感知变化）。
+_system_cache = {"ts": 0.0, "boot": None}
 
 
 # ===================== 1. 时序/日程感知 =====================
@@ -112,11 +118,8 @@ def foreground_window() -> str:
         return ""
 
 
-def system_situation() -> dict:
-    """尽力读取系统状态；Windows 优先，失败则返回空字段（不伪造）"""
-    info = {"os": platform.system(), "runtime_sec": None, "active_app": None,
-            "foreground": None}
-    # 系统运行时长（尽力）
+def _query_boot_time() -> Optional[datetime]:
+    """慢速查询系统启动时刻（尽力；失败返回 None，不伪造）。单独抽出以便缓存。"""
     try:
         if sys.platform == "win32":
             r = subprocess.run(
@@ -127,15 +130,35 @@ def system_situation() -> dict:
             )
             if r.returncode == 0 and r.stdout.strip():
                 try:
-                    boot = datetime.fromisoformat(r.stdout.strip().replace("+00:00", ""))
-                    info["runtime_sec"] = int((datetime.now() - boot).total_seconds())
+                    return datetime.fromisoformat(r.stdout.strip().replace("+00:00", ""))
                 except Exception:
-                    pass
+                    return None
         else:
             secs = float(open("/proc/uptime").read().split()[0])
-            info["runtime_sec"] = int(secs)
+            return datetime.now() - timedelta(seconds=secs)
     except Exception:
-        pass
+        return None
+
+
+def system_situation() -> dict:
+    """尽力读取系统状态；Windows 优先，失败则返回空字段（不伪造）。
+
+    第 5 项优化（缓存 boot-time）：PowerShell 查 LastBootUpTime 慢（约 4s），
+    而启动时刻变化极慢。故把 boot 时刻按 PERCEPTION_SYSTEM_CACHE_TTL 缓存，
+    每次调用用 now - boot 实时换算运行时长（保证时长准确），避免每轮卡 4s。
+    前台窗口是高动态信号，仍实时读取（不作为缓存，靠 sensing_hint 感知变化）。
+    """
+    info = {"os": platform.system(), "runtime_sec": None, "active_app": None,
+            "foreground": None}
+    # 系统运行时长（尽力 + 缓存，详见函数 docstring）
+    now = time.time()
+    boot = _system_cache.get("boot") if isinstance(_system_cache, dict) else None
+    if boot is None or (now - _system_cache.get("ts", 0.0)) >= PERCEPTION_SYSTEM_CACHE_TTL:
+        boot = _query_boot_time()
+        _system_cache["ts"] = now
+        _system_cache["boot"] = boot
+    if boot is not None:
+        info["runtime_sec"] = int((datetime.now() - boot).total_seconds())
     # 前台窗口（Windows 原生，更准；失败置空）
     info["foreground"] = foreground_window() or None
     if info["foreground"]:
@@ -164,6 +187,23 @@ def _current_tab_text() -> str:
     except Exception:
         return ""
 
+
+
+def _current_screen_text() -> str:
+    # 场景 B（可选）：用本地视觉模型识别"屏幕/当前窗口"补充感知。
+    # 依赖 VISION_ENABLED + VISION_SCREEN_ON_DEMAND 与本地 Ollama 视觉模型；
+    # 未启用/无模型/失败时返回空串（不伪造）。作为前台活跃感知的补充。
+    try:
+        from core.vision import get_vision_service
+        from core.config import VISION_SCREEN_ON_DEMAND, VISION_ENABLED
+        if not (VISION_ENABLED and VISION_SCREEN_ON_DEMAND):
+            return ""
+        text = get_vision_service().describe_screen()
+        if not text:
+            return ""
+        return "用户屏幕/当前窗口（视觉识别）：" + text[:200]
+    except Exception:
+        return ""
 
 
 # ===================== 3. 位置与情境感知 =====================
@@ -419,6 +459,85 @@ def _hour_period(hour: int) -> str:
 
 # ===================== 汇总：感知管理器 =====================
 
+def _density_trim(parts, max_chars) -> list:
+    """密度裁剪：超 max_chars 时从后往前裁低价值项，最大程度保留高价值项。
+
+    保留优先级（靠条目开头关键字判断价值，不依赖具体文本）：
+      - 高价值保留：时序("现在：")、位置("你所在"/"当前应是")、关系/在场
+        ("没找你了"/"没聊了"/"连续")、作息异常("熬夜")、情绪趋势("最近的心情")
+      - 其余视为可裁（前台窗口/标签页/屏幕快照等瞬时项优先级最低）
+    纯函数、确定性；只删整项不截断单行，保证输出仍是一段可读中文。
+    """
+    _KEEP_HINT = ("现在：", "你所在", "当前应是", "没找你了", "没聊了", "连续",
+                  "熬夜", "最近的心情")
+    if len("\n".join(parts)) <= max_chars:
+        return parts
+    kept = [p for p in parts if p.startswith(_KEEP_HINT)]
+    rest = [p for p in parts if not p.startswith(_KEEP_HINT)]
+    # 若高价值项本身已超限（极端），退化从前往后截断。
+    if len("\n".join(kept)) > max_chars:
+        out = []
+        for p in kept:
+            if len("\n".join(out + [p])) > max_chars and out:
+                break
+            out.append(p)
+        return out
+    # 有富余容量时，把中价值项从前往后尽量补回（不覆盖高价值项顺序）。
+    out = list(kept)
+    for p in rest:
+        if len("\n".join(out + [p])) > max_chars:
+            break
+        out.append(p)
+    return out
+
+
+def _build_detailed_supplement(pm, user_id: str) -> str:
+    """构造感知摘要的"详细补充部分"（供 summarize_detailed 使用，纯 harness）。
+
+    追加比精简版更可追溯的原始信息：最近活跃明细、作息明细、情绪样本数、
+    滚动帧趋势。全部来自已有模型，不新增采集、不调 LLM；读不到即省去该项。
+    """
+    lines = []
+    uid = user_id or "default_user"
+    # 滚动帧趋势（sensing_hint 的跨帧归纳；无则省）
+    try:
+        from core.sensing_hint import frame_trend
+        trend = frame_trend(uid)
+        if trend:
+            lines.append(trend)
+    except Exception:
+        pass
+    # 最近活跃明细（最近 3 条带时间）
+    try:
+        acts = pm.routine._data.get(uid, {}).get("acts", [])
+        if acts:
+            recent = [a for a in acts[-3:] if a.get("ts")]
+            if recent:
+                detail = "；".join(
+                    f"{a['ts'][11:16]}({a.get('hour')}时)" for a in recent
+                )
+                lines.append(f"最近活跃时刻：{detail}")
+    except Exception:
+        pass
+    # 作息明细（活跃高峰时段 + 观察天数）
+    try:
+        s = pm.routine.summary(uid)
+        if s.get("has_log") and s.get("observed_days"):
+            lines.append(
+                f"作息：活跃高峰{s['peak_period'] or '未知'}，已观察{s['observed_days']}天"
+            )
+    except Exception:
+        pass
+    # 情绪样本数（统计置信度）
+    try:
+        tr = pm.mood_trend.trend(uid)
+        if tr["samples"]:
+            lines.append(f"情绪样本：共{tr['samples']}条，近期{tr['recent_samples']}条")
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
 class PerceptionManager:
     """汇总时序/系统/情境/作息/情绪趋势，生成注入 system prompt 的感知文本"""
 
@@ -432,6 +551,31 @@ class PerceptionManager:
 
     def record_mood(self, user_id: str, primary: str, valence: float, affection_avg: float):
         self.mood_trend.record(user_id, primary, valence, affection_avg)
+
+    #: 感知摘要的短 TTL 缓存（第 5/二(B) 项）：避免 LLM 主动/重复拉取时每次都重算+读 IO
+    _summary_cache = {"ts": 0.0, "text": None}
+
+    def summarize_detailed(self, user_id: str) -> str:
+        """比 summarize 更细/更具体的一版感知（供 get_perception_summary 工具用）。
+
+        与被动注入的精简版区分开：在 summarize 基础上，追加最近活跃明细、作息明细、
+        情绪样本数、滚动帧趋势等"原始/可追溯"信息，真正兑现工具承诺的
+        "比已有上下文更新的用户当下状态细节"。带缓存；失败降级为精简版（不伪造）。
+        """
+        try:
+            # 缓存：300 秒内复用，避免工具被连问时反复重算 + 触发前台窗口实时读取
+            now = time.time()
+            if (now - self._summary_cache["ts"]) < PERCEPTION_SYSTEM_CACHE_TTL                     and self._summary_cache["text"] is not None:
+                return self._summary_cache["text"]
+            detailed = _build_detailed_supplement(self, user_id)
+            text = self.summarize(user_id)
+            if detailed:
+                text = (text + "\n" + detailed) if text else detailed
+            if text:
+                self._summary_cache.update({"ts": now, "text": text})
+            return text
+        except Exception:
+            return self.summarize(user_id)
 
     def summarize(self, user_id: str) -> str:
         """生成感知文本注入 system prompt；读不到/默认状态时尽量克制"""
@@ -457,6 +601,14 @@ class PerceptionManager:
             parts.append(tab_text)
         elif sysinfo.get("foreground"):
             parts.append(f"用户当前可能在用：{sysinfo['foreground']}")
+
+        # 场景 B（可选）：屏幕/当前窗口视觉识别，作为前台活跃感知的补充（默认关）
+        try:
+            screen_text = _current_screen_text()
+            if screen_text:
+                parts.append(screen_text)
+        except Exception:
+            pass
         # 作息习惯
         routine = self.routine.summary(user_id)
         if routine["observed_days"]:
@@ -503,4 +655,20 @@ class PerceptionManager:
 
         if not parts:
             return ""
+        # 新鲜度标记（第 1 项之一）：给"用户此刻在看什么"这类瞬时采样项打上时刻戳，
+        # 避免模型把一瞬快照误当长期状态。克制：仅对当下变化类项标注，其余不加。
+        _now = datetime.now().strftime("%H:%M")
+        _fresh = []
+        for p in parts:
+            if p.startswith("用户当前可能在用") or "标签页" in p or "屏幕/当前窗口" in p:
+                if not p.endswith("。"):
+                    p = p + "。"
+                _fresh.append(f"{p}（此刻采集 {_now}）")
+            else:
+                _fresh.append(p)
+        parts = _fresh
+        # 密度裁剪（第 1 项之二）：超 PERCEPTION_PROMPT_MAX_CHARS 时保护高价值项
+        #（时序、位置、关系/情绪），从后往前裁掉低价值项，避免感知 prompt 无限膨胀。
+        if len("\n".join(parts)) > PERCEPTION_PROMPT_MAX_CHARS:
+            parts = _density_trim(parts, PERCEPTION_PROMPT_MAX_CHARS)
         return "\n".join(parts)

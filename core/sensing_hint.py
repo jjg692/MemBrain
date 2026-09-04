@@ -23,10 +23,14 @@ import time
 from core.config import (
     ENVIRONMENT_SENSING_ENABLED,
     SENSING_TRIGGER_ENABLED,
+    SENSING_FRAME_WINDOW,
 )
 
 #: 仅内存记录（keyed by user_id），进程重启即失忆——本就只是"本次会话内的变化感"
 _last = {}
+#: 滚动帧窗口（keyed by user_id，list）：最近若干帧环境快照 {ts, foreground, tab}，
+#: 用于说出"你刚才从 X 切到了 Y"这类跨帧趋势。仅内存，重启即清空。
+_frames: dict = {}
 _lock = threading.RLock()
 
 
@@ -54,12 +58,27 @@ def _clean(text: str) -> str:
     return " ".join(str(text or "").split())
 
 
+def _record_frame(uid: str, state: dict, now: float) -> None:
+    """把一帧环境快照推入滚动窗口（配合 SENSING_FRAME_WINDOW 裁剪）。"""
+    if not SENSING_FRAME_WINDOW:
+        return
+    frames = _frames.setdefault(uid, [])
+    frames.append({
+        "ts": now,
+        "foreground": state.get("foreground", "") or "",
+        "tab": state.get("tab", "") or "",
+    })
+    if len(frames) > SENSING_FRAME_WINDOW:
+        del frames[: len(frames) - SENSING_FRAME_WINDOW]
+
+
 def sensing_change_hint(user_id: str = "default_user", cooldown_sec: int = 60) -> str:
     """检测前台窗口/当前标签页相对上次是否发生变化；变化显著且过冷却期则返回提示文本。
 
     返回形如：
       "用户刚把浏览器切换到了：..." 或 "用户刚切换到了前台窗口：..."
     无变化 / 读不到 / 未开启 / 冷却期内 / 首次观测(基线) -> 返回空串（不打扰）。
+    每次被调用都会把当前帧推进滚动窗口（供 frame_trend 使用）。
     """
     if not ENVIRONMENT_SENSING_ENABLED or not SENSING_TRIGGER_ENABLED:
         return ""
@@ -70,6 +89,7 @@ def sensing_change_hint(user_id: str = "default_user", cooldown_sec: int = 60) -
         if not cur["foreground"] and not cur["tab"]:
             return ""
         with _lock:
+            _record_frame(uid, cur, now)
             prev = _last.get(uid)
             # 首次观测（无历史基线）：登记但不打扰，避免把首帧当"变化"
             if not prev:
@@ -90,5 +110,49 @@ def sensing_change_hint(user_id: str = "default_user", cooldown_sec: int = 60) -
             if tab_changed:
                 return "用户刚把浏览器切换到了（可以自然接一句）：" + cur["tab"]
             return "用户刚切换到了前台窗口（可以自然接一句）：" + cur["foreground"]
+    except Exception:
+        return ""
+
+
+def frame_trend(user_id: str = "default_user") -> str:
+    """滚动帧趋势感知：根据最近 N 帧环境快照，用一句话概括"用户刚才的注意力走向/专注点"。
+
+    仅在窗口内 **内容确实有变化** 时才返回（不伪造）；窗口不足 / 无变化 / 未开启 / 读不到
+    一律返回空串。返回值举例：
+      - "你刚才从「写代码」切到了「浏览器」，最近一直专注在「X」"
+      - "你最近一直专注在「X」"
+    注意：这里只做**确定性归纳**（比较前台/标签页的变化与重复），不调 LLM。
+    """
+    if not ENVIRONMENT_SENSING_ENABLED or not SENSING_TRIGGER_ENABLED or not SENSING_FRAME_WINDOW:
+        return ""
+    uid = user_id or "default_user"
+    try:
+        frames = []
+        with _lock:
+            frames = [dict(f) for f in _frames.get(uid, [])]
+        # 去掉空帧（前台/标签页都空的不算有效内容）
+        frames = [f for f in frames if f.get("foreground") or f.get("tab")]
+        if len(frames) < 2:
+            return ""
+        # 每帧取"前台窗口优先、无则标签页"作为关注点
+        def _focus(f):
+            return _clean(f.get("foreground") or f.get("tab") or "")
+        foci = [_focus(f) for f in frames]
+        foci = [x for x in foci if x]
+        if not foci:
+            return ""
+        # 去除相邻重复（连看同一内容算一次），得到"关注序列"
+        seq = []
+        for x in foci:
+            if not seq or seq[-1] != x:
+                seq.append(x)
+        if len(seq) <= 1:
+            # 全程专注同一内容：给一句"一直专注在 X"
+            return f"你最近一直专注在「{seq[0][:40]}」"
+        # 有 scene 切换：说"从 X 切到了 Y，最近专注在 Z"
+        return (
+            "你刚才从「" + seq[0][:30] + "」切换到了「" + seq[-1][:30]
+            + "」，最近一直专注在「" + seq[-1][:40] + "」"
+        )
     except Exception:
         return ""

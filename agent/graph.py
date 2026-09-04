@@ -344,6 +344,17 @@ class LangGraphMemoryAgent:
         if plan:
             base_prompt = base_prompt + self._build_task_prompt(plan, task_status)
 
+
+        # 场景 A：对话图片经本地视觉模型转述给主模型（若 VISION_ENABLED+VISION_IN_CHAT）
+        if state.get("image"):
+            try:
+                from core.vision import get_vision_service
+                _desc = get_vision_service().describe_image(state.get("image"))
+                if _desc:
+                    base_prompt = base_prompt + ("\n\n【用户刚发来一张图片，以下是视觉转述（机器识别，可能有误，供参考）】\n" + _desc)
+            except Exception:
+                pass
+
         # ========== 构建 LLM 消息 ==========
         # 第一部分：L1 历史（该 user 的完整会话，不含本次；L1 已在 add_to_l1 中按
         # MEMORY_CONTEXT_MAX_ROUNDS 压缩，故全量注入不会无限增长，且能支撑跨轮指代消解）
@@ -635,6 +646,16 @@ class LangGraphMemoryAgent:
             _chg = sensing_change_hint(user_id)
             if _chg:
                 lines.append("【感知到的变化】" + _chg)
+        except Exception:
+            pass
+
+        # 滚动帧趋势感知（第 2/3 项）：跨帧归纳"你刚才从 X 切到了 Y / 一直专注在 Z"。
+        # 有内容变化时才提示，让角色接续语境，纯 harness 确定性归纳。
+        try:
+            from core.sensing_hint import frame_trend
+            _trend = frame_trend(user_id)
+            if _trend:
+                lines.append("【感知到的注意力趋势】" + _trend)
         except Exception:
             pass
 
