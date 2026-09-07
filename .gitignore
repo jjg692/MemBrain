@@ -29,12 +29,10 @@ relation_memory_*.json
 /backup/
 
 # ===================== 星露谷 MCP 扩展（stardew/） =====================
-# Node MCP server 依赖与构建产物（他人拉项目后 npm install + npm run build 自行生成）
-stardew/StardewValley-MCP/mcp-server/node_modules/
-stardew/StardewValley-MCP/mcp-server/build/
-# SMAPI mod 构建产物与运行时桥接文件（进游戏才生成）
-stardew/StardewValley-MCP/smapi-mod/bin/
-stardew/StardewValley-MCP/smapi-mod/obj/
-stardew/StardewValley-MCP/smapi-mod/bridge_data.json
-stardew/StardewValley-MCP/smapi-mod/actions.json
-stardew/StardewValley-MCP/smapi-mod/actions/
+# 整个 stardew/ 目录从 git 跟踪中移除（本地保留），不再纳入版本库。
+# 含第三方 StardewValley-MCP server 与项目自制接入代码。
+/stardew/
+
+# ===================== 红警 MO 接入插件（redalertmo/） =====================
+# 实机接入（C++ DLL 逆向）已暂停，不进仓库。整目录忽略，保留本地。
+redalertmo/

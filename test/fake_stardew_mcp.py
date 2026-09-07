@@ -2,11 +2,30 @@
 import json
 import sys
 
-TOOLS = [{
-    "name": "stardew_get_state",
-    "description": "Get current game state.",
-    "inputSchema": {"type": "object", "properties": {}},
-}]
+TOOLS = [
+    {
+        "name": "stardew_get_state",
+        "description": "Get current game state.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "stardew_spawn",
+        "description": "Spawn companions into the game world.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "stardew_set_mode",
+        "description": "Set companion mode.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string"},
+                "mode": {"type": "string"},
+            },
+            "required": ["target", "mode"],
+        },
+    },
+]
 
 def read_line():
     line = sys.stdin.readline()
@@ -38,9 +57,16 @@ def main():
         elif method == "tools/call":
             state = {"season": "Spring", "day_of_month": 15, "weather": "Sun",
                      "location": "Farm", "player": {"money": 999}}
+            text = json.dumps(state, ensure_ascii=False)
+            name = msg.get("params", {}).get("name", "")
+            if name == "stardew_spawn":
+                text = "Command sent: spawn"
+            elif name == "stardew_set_mode":
+                a = msg.get("params", {}).get("arguments", {})
+                text = f"mode set: {a.get('target')} -> {a.get('mode')}"
             sys.stdout.write(json.dumps({
                 "jsonrpc": "2.0", "id": mid,
-                "result": {"content": [{"type": "text", "text": json.dumps(state, ensure_ascii=False)}]},
+                "result": {"content": [{"type": "text", "text": text}]},
             }) + "\n")
             sys.stdout.flush()
 

@@ -117,6 +117,117 @@ Live2D 模型、角色与渲染契约见 `docs/dual-window-contract.md`。
 
 ---
 
+## 🤖 AI 拟人化层次
+
+MemBrain 按「拟人化主体的处理链路」拆成**七层 + 一个横切支撑层**。判断"哪层"的标准不是文件归属，而是某功能在「让 AI 像个活的人」这条链路里扮演的角色——从"看到世界"到"主动开口"，每层都有清晰的 harness / 模型边界：**确定性的采集、结构、阈值由 harness 负责，"怎么理解 / 怎么想 / 怎么说"交给 LLM**（LLM 优先，无硬编码判断）。
+
+```
+用户/世界 ──▶ 感知(①) 记忆(②) ──▶ 思维(③)
+                                   │ 读当前情绪/关系
+                                   ▼
+                             情感/关系(④)
+                                   │ 决定回复 + 工具
+                ┌──────────────────┘
+                ▼
+            行为(⑤) ─▶ 工具执行 / 动作落地
+                │
+            表达(⑥) ─▶ 台词 + Live2D 身体 + 择时
+                │
+            主动(⑦) ─▶ 低频自发开口 ──────► (反馈回记忆/感知)
+```
+
+### ① 感知层（我能看到 / 我意识到当下）
+
+把"外部世界 + 用户状态"转成结构化信号，注入给"意识"（system prompt），让 AI 不再是无时空感的一次性回复工具。落地在 `core/perception.py` / `core/sensing.py` / `core/vision.py`：
+
+| 感知项 | 函数 | 说明 |
+|---|---|---|
+| 时序 | `time_situation` | 几点 / 星期 / 早午晚深夜 / 周末 |
+| 系统环境 | `system_situation` | 系统运行时长 / 前台窗口（Windows 原生，读不到不伪造） |
+| 位置情境 | `location_situation` | 常驻城市 + 由时段推导场景（工作/午休/自由/休息） |
+| 浏览器当前标签页 | `_current_tab_text` + CDP | 标题 + 链接（需以 debug 端口启动浏览器） |
+| 桌面窗口视觉 | `_current_screen_text` + vision 场景 B | 本地 Ollama VLM 转述屏幕（默认关） |
+| 对话图片视觉 | vision 场景 A | 转述用户发来的图片（默认关） |
+| 作息/情绪趋势/在场/关系投入/熬夜异常 | `RoutineModel` / `MoodTrend` / `summarize` | 由历史活跃样本聚合 |
+
+设计铁律：`PerceptionManager.summarize()` 把结果拼成【你对当下时空与用户状态的感知】注入 system prompt；**读取不到一律不伪造**。感知最新还带**新鲜度标记**（瞬时采样项追加采集时刻戳）与**密度裁剪**（`PERCEPTION_PROMPT_MAX_CHARS` 超限按价值优先级裁剪），慢速系统查询有缓存。
+
+### ② 记忆层（我记得我们发生过什么）
+
+拟人的"内在历史"。五层架构 + 关系记忆内核：
+
+- **L1→L5**：内存上下文（当前会话 + 指代消解，超限压缩）/ 短期（ChromaDB，冷启动回灌 L1）/ 主动信息池（周期采集外推）/ 重要事实（LLM 抽取，带衰减）/ 角色事实（按 role_id 隔离）
+- **关系记忆内核 `RelationMemory`**：`episodes` 共同经历账本、`user_model`/`self_model` 自我模型、`values` 价值内核、`promises` 承诺账本、指数半衰期时间衰减、周期反思
+
+拟人化亮点：每条经历记 `resonance`（情绪共振）+ `impact` + `vitality`（鲜活度随时间衰减），支持 `resolve_promises_on_user_signal`（用户提"上次说好…"自动兑现承诺）——"记性好 + 会随时间自然地淡忘/亲近"。边界：存储结构、衰减、阈值是 harness；"抽事实 / 抽反思结论 / 算共振"交给 LLM。
+
+### ③ 思维链路层（我该怎么想、怎么做）
+
+"大脑皮层"，由接收到决定回复的整个过程。核心在 `agent/graph.py`（LangGraph）：
+
+- **图**：`agent → tools → observe → agent → END`，带 iteration 防死循环上限
+- **自治路由**：`_agent_node` 让 LLM 自主决定是否调工具、调哪个、要不要走任务循环
+- **M2 任务循环**：`agent/planner.py` 纯函数 `TaskPlanner` 判断简单/多步 → 生成 plan；`_observe_node` 累计观察；`_build_task_prompt` 注入进度
+- **兜底守卫**：`_needs_realtime`/`_needs_remind` 在模型"说要查却不查"时强制补一次工具调用
+- **情感预判**：`EmotionAnalyzer` 让 LLM 先输出 JSON（情感 + 6 维好感度），再生成回复（模式 B）
+- **群聊接力**：`persist_emotion=False` 跳过情感分析，避免角色互聊被误当用户情感
+
+边界：流程编排、路由判断、防死循环是 harness；思考与决策是模型。`TaskPlanner.plan` 故意做成纯函数，只搭骨架不替代 LLM 判断。
+
+### ④ 情感/关系层（我此刻的心情 / 我和你什么关系）
+
+拟人区别于工具的核心——情感与关系是**持续演化**的，不是临时变量。落地 `core/emotion` + `core/relation_memory.py`：
+
+- **6 维好感度**：喜欢/信任/熟悉/尊重/兴趣/依恋（0-1），跨会话持久化
+- **关系养成阶段** `relationship_stage`：好感度 + 共同经历 → 陌生/熟悉/亲密/挚友；`relation_call_name`（称呼）+ `_stage_behavior_text`（距离感/开放度注入 prompt）——**有原因的升段**（经历证据够才提前），且不改动内核防 OOC
+- **关系记忆**：`affection_reasons`（各维度为什么）、`experience_evidence`（升段依据）、`apply_decay`（随时间回归基线）
+
+亮点：好感度不是死数值，而是有来源、会衰减、能驱动行为差异。边界：数值结构/衰减/阶段阈值是 harness；"这条消息情绪是什么、好感度该涨多少"由 LLM 判定。
+
+### ⑤ 行为层（我实际去做什么）
+
+把"思考结论"变成对外动作。落地 `core/tools.py` / `core/assistant_tools.py` / `stardew/runtime.py`：
+
+- **工具执行**：`TOOL_REGISTRY` + `execute_tool` 动态注册；`search_web`（意图路由多源回退）/ `control_pc` / 助手工具（提醒、时间、文件，严格沙箱）/ 感知工具（可选）/ `express_body`（Live2D 指挥）/ MCP（星露谷，可选）
+- **动作落地**：LangGraph `ToolNode` 实际调用并回写 `ToolMessage`
+- **游戏旁路** `stardew/runtime.py`：后台线程感知游戏状态 → 沉淀记忆（旁路观察者，不介入 ReAct 闭环）
+
+边界：工具执行、沙箱、装载是 harness；"选哪个工具、要不要做"由 LLM 自主决定。
+
+### ⑥ 表达层（我怎样把话说出口 / 动起来）
+
+拟人最后一公里——"说什么"已由思维层定，"怎么呈现"这里负责。落地 `core/behavior.py` / `core/sensing_hint.py` / `graph.py::proactive_message`：
+
+- **语言表达**：`_build_system_prompt` 注入【角色扮演守则】、称呼风格、角色口吻
+- **身体表达** `BehaviorMapper.derive(reply, emotion)` 纯函数输出标准行为事件 `{emotion, expression, mouth_open, actions, pitch_hint}`，供 Live2D 壳做表情/口型/动作——壳不用猜，内核说了算
+- **感知共鸣** `sensing_hint`：前台窗口/标签页变化 → 低频注入"用户刚切换到了…"（冷却）
+- **主动性表达** `proactive_message`：主动开口时 `_compose_proactive_hint` 从关系记忆挑"此刻值得提的"素材注入；`L3Pusher` / `ReminderScheduler` 到点/有料时推送
+
+亮点：贯彻"先算情绪 → 再定动作"，`BehaviorMapper` 是纯函数——身体反应由内核决定而非前端猜。边界：表情映射、冷却、口型计算是 harness；最终台词由模型生成。
+
+### ⑦ 主动性层（我为什么要先开口）
+
+贯穿行为与表达、但本质独立的"自发"引擎——把"被动应答"升级为"会主动找你"。落地 `core/proactivity.py`：
+
+- **`ProactiveDecider`**：低频、克制决策器，综合信号判断"该不该主动打扰 + 优先说什么"
+- **信号源**全部复用已有能力（不新增采集/不额外调 LLM）：未兑现承诺 / 鲜活经历 / 情绪走向 / 感知变化 / 断联天数
+- **纪律**：`PROACTIVITY_MIN_INTERVAL_MIN`（默认 30 分钟）、`PROACTIVITY_DAILY_CAP`（每日 8 次）、"有料才开口"（素材不够好或读不到 → `should_act=False`）
+- **优先级**：`promise > episode > mood > sensing_change > reconnect`
+
+亮点：这是"AI 朋友/伴侣"最强的拟人特征——不是等你说话，而是主动惦记你。边界：时机、节流、优先级全确定性 harness；"开口的措辞"交给主模型。当前 `ProactiveDecider` 是独立决策器，尚未接常驻调度线程（见 `proactivity.py` 说明）。
+
+### 横切支撑层
+
+不属于拟人本体，但支撑所有层：
+
+- **`core/config.py`**：每个能力和开关（感知/感知工具/记忆/情感/视觉/主动性/MCP 各自可开关，后台 `EDITABLE_KEYS` 可配）
+- **`core/adapters.py` / `llm_manager.py` / `initializer.py`**：Ollama / OpenAI 兼容适配（含视觉输入）、provider 切换、依赖装配
+- **`core/state.py`**：LangGraph State 定义
+- **`api/websocket.py` / `websocket_manager.py`**：把台词、主动消息、behavior 事件推给前台/宠物壳（拟人闭环的"最后一公里"）
+- **`desktop_pet_qt.py` / `static/live2d/*`**：Live2D 客户端壳，消费表达层产出的 `behavior` 做表情/口型/动作（表达层的消费端）
+
+---
+
 ## 🔌 API
 
 ### HTTP（公开）
@@ -165,31 +276,38 @@ python scripts/generate_role.py "户山香澄" --work "BanG Dream!" --out role_p
 
 ## 🧩 可选扩展：星露谷 MCP
 
-让宠物感知并参与星露谷游戏（读状态 / 进游戏当同伴 / 记忆反写 / 多 agent 小队）。**默认关闭**
-（`STARDEW_MCP_ENABLED=false`），不影响不玩星露谷的用户；想启用只需在后台或 `.env` 打开开关。
+让宠物感知并参与星露谷游戏（读状态 / 自主游戏 / 记忆反写与回忆 / 多 agent 小队）。
+**默认关闭**（`STARDEW_MCP_ENABLED=false`），不影响不玩星露谷的用户；想启用只需在后台或 `.env` 打开开关。
 
-本项目**不自己实现 MCP 服务端**，而是直接复用开源项目
-**[luy-0/StardewValley-MCP](https://github.com/luy-0/StardewValley-MCP)**（**Apache-2.0** 许可，
-共 **22 个工具**：6 只读 + 16 操作），在此致谢其作者。
+本项目**不自己实现 MCP 服务端**，而是随仓库自带一套 Node 桥接
+**StardewMCPBridge**（`stardew/StardewValley-MCP/`）：mcp-server（Node MCP 服务器，
+共 **25 个工具**：13 全局 + 12 玩家直控）通过文件与 SMAPI Mod（C#）通信，
+Mod 在游戏里生成 AI 同伴（Player 2/3）并读写 `bridge_data.json`/`actions/`。
 
-- **实现形态**：Python MCP 服务器（官方 `mcp` SDK）+ SMAPI Mod（C#），Mod 与服务器经本地
-  TCP(24642) + protobuf + 共享密钥握手。
-- **本仓库侧**：`core/mcp_client.py` 在启动时按 `config/mcp.json` 动态发现并注册
-  `mcp_<server>_<tool>` 工具到 `ALL_TOOLS`/`TOOL_REGISTRY`，LLM 即可调用；`stardew/`
-  目录承载记忆反写 / 多 agent 协调等本仓库自有逻辑。
+- **实现形态**：mcp-server（Node.js）◄文件► SMAPI Mod（C#）◄► Stardew Valley，
+  同伴=可见 NPC + 不可见 shadow Farmer 驱动游戏机制。
+- **可插拔插件 + 后台启停**：每个 MCP（含星露谷）声明在 `config/mcp.json`
+  （`{name,command,args,env,enabled}`）。`core/mcp_registry.py`（`McpRegistry`）读取声明、
+  持有 `McpManager`，启停时**动态注册/注销** `mcp_<server>_<tool>` 工具到
+  `ALL_TOOLS`/`TOOL_REGISTRY`，并让 Agent 缓存失效（新会话拾取最新工具集）。
+  **无需重启后端**。后台「📦 MCP 管理」页可对每个服务启停/测试/开关。
+- **自主游戏**：`stardew/autonomy.py` 提供「读状态 → 决策 → 行动 → 沉淀记忆」闭环，
+  AI 伙伴可主动进场/移动/互动/聊天；MCP 注册后自动多一个高阶 `stardew_join` 工具
+  （spawn + 设模式），用户邀请一起玩时 LLM 一调即可进场。
+- **记忆增强**：`stardew/game_memory.py` 支持去重、场景/里程碑分级沉淀、最新优先/多关键词召回。
 - 未开启/未启动/未装游戏时**静默降级**，不影响主进程（符合"不伪造、失败降级"原则）。
 
 **启用步骤（简明版）**：
 
-1. **安装 MCP 服务器**（需 `uv`）：
-   `git clone https://github.com/luy-0/StardewValley-MCP luy0 && cd luy0 && uv tool install ./mcp && stardew-valley-mcp doctor`
-2. **部署 SMAPI Mod**：从 [Releases](https://github.com/luy-0/StardewValley-MCP/releases) 下载
-   `StardewValleyMCP-Mod-v*.zip`（或源码 `./mod/scripts/build.sh --deploy`）解压到游戏 `Mods/`，
-   用 SMAPI 启动并加载存档；Mod 首次启动会在 `Mods/StardewValleyMCP/config.json` 生成监听地址与随机 `SharedSecretBase64`。
-3. **填密钥**：把 Mod `config.json` 的 `SharedSecretBase64` 填入 `config/mcp.json` 的
-   `STARDEW_VALLEY_MCP_SHARED_SECRET`（`command`=`stardew-valley-mcp`，`args` 只读 `["serve"]`
-   / 可操作 `["serve","--allow-write"]`）。
-4. **打开开关并重启**：`.env` 写 `STARDEW_MCP_ENABLED=true`，再 `python web_app.py`。
+1. **（可选）构建 mcp-server**：本仓库已带 `stardew/StardewValley-MCP/mcp-server/build/index.js`；
+   改动源码需 `cd mcp-server && npm install && npm run build`。
+2. **构建并部署 SMAPI Mod（进游戏才需）**：`cd smapi-mod && dotnet build`，把 assets 放到
+   游戏 `Mods/StardewMCPBridge/`。Mod 在游戏内写 `bridge_data.json`、消费 `actions/`。
+3. **改配置**：`config/mcp.json` 的 stardew server 已指向
+   `node {PROJECT_ROOT}/stardew/.../mcp-server/build/index.js`；真实游玩时把
+   `STARDEW_BRIDGE_PATH`/`STARDEW_ACTION_DIR` 指向游戏 `Mods/StardewMCPBridge/` 下的实际路径。
+4. **打开开关并启动**：`.env` 写 `STARDEW_MCP_ENABLED=true`，再 `python web_app.py`；
+   或在后台「📦 MCP 管理」页对 `stardew` 服务「启动」（无需重启后端）。
 
 > 完整架构、依赖环境与排错见 **`stardew/README.md`**。
 
@@ -222,7 +340,10 @@ agent-web-refactor/
 ├── api/                       # 路由 / WS / 后台 / Live2D
 ├── templates/                 # chat.html / admin.html / live2d 页
 ├── static/                    # 前端资源 / live2d
-├── stardew/                   # 星露谷 MCP 可选扩展（含独立 README）
+├── core/
+│   ├── mcp_client.py          # MCP 客户端：每个 server 一个子进程 + 启停/状态
+│   └── mcp_registry.py        # MCP 插件注册中心：动态注册/注销工具 + Agent 缓存失效
+├── stardew/                   # 星露谷 MCP 可选扩展（含独立 README）：记忆/自主游戏/轮询
 └── scripts/                   # 角色 prompt 生成器
 ```
 
@@ -234,7 +355,7 @@ agent-web-refactor/
 python -m pytest test -q --ignore=backup
 ```
 
-覆盖：记忆 / 感知 / 情感 / 工具执行 / 任务循环 / WS / 星露谷 / 视觉等。
+覆盖：记忆 / 感知 / 情感 / 工具执行 / 任务循环 / WS / 星露谷 / MCP 插件化 / 自主游戏 / 视觉等。
 
 ---
 
@@ -288,10 +409,15 @@ python -m pytest test -q --ignore=backup
 | `STARDEW_MCP_ENABLED` | 星露谷 MCP 总开关（默认关） | `false` |
 | `STARDEW_MEMORY_POLLER_ENABLED` | 星露谷记忆自动沉淀（需 MCP 也开） | `false` |
 | `STARDEW_POLL_INTERVAL` | 星露谷状态轮询间隔（秒） | `60` |
+| `STARDEW_AUTONOMY_ENABLED` | 星露谷自主游玩心跳（需 MCP 也开） | `false` |
+| `STARDEW_AUTONOMY_INTERVAL` | 星露谷自主游玩心跳间隔（秒） | `30` |
+| `STARDEW_AUTONOMY_LLM_ENABLED` | 星露谷自主游玩心跳·LLM决策版（需装配 LLM 适配器，失败回退规则） | `false` |
 | `LIVE2D_ENABLED` / `LIVE2D_MODEL_ROOT` / `LIVE2D_RENDERER` / `LIVE2D_DEFAULT_MODEL` | Live2D 开关 / 模型根目录 / 渲染器 / 默认模型 | `true` / `live2d` / `l2dwidget` / 空 |
 | `LIVE2D_BODY_MODE` | Live2D 情绪身体表达模式（`C` 内核映射 / `B` LLM 主动指挥） | `C` |
 
 > 星露谷 MCP 使用的开源仓库地址：[luy-0/StardewValley-MCP](https://github.com/luy-0/StardewValley-MCP)（Apache-2.0，详见「可选扩展：星露谷 MCP」一节）。
+
+> 🔊 **TTS 语音合成** 由后台独立「🔊 TTS 语音」页统一管理（开关 + 地址/端口 + 参照音频 + 语言 + 格式 + 语速 + 测试/保存），配置项（`TTS_ENABLED`、`TTS_HOST`、`TTS_PORT`、`TTS_REF_AUDIO_PATH`、`TTS_PROMPT_TEXT`、`TTS_TEXT_LANG`、`TTS_PROMPT_LANG`、`TTS_MEDIA_TYPE`、`TTS_SPEED_FACTOR`）因此**不再出现在「⚙️ 配置管理」页**。默认关闭；改动即时生效（写入 `.env` 并同步 `os.environ`）。详见 `.env.example` 的 TTS 区块注释。
 
 ---
 

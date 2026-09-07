@@ -108,6 +108,32 @@ STARDEW_MCP_ENABLED = _bool(os.getenv("STARDEW_MCP_ENABLED", "false"))
 STARDEW_MEMORY_POLLER_ENABLED = _bool(os.getenv("STARDEW_MEMORY_POLLER_ENABLED", "false"))
 # 星露谷状态轮询间隔（秒）
 STARDEW_POLL_INTERVAL = _int(os.getenv("STARDEW_POLL_INTERVAL"), 60)
+# 星露谷自主游玩心跳：开启后让 AI 伙伴在游戏里低频自主动作（进场/存在感动作）。
+# 属星露谷 MCP 的扩展能力，由后台「📦 MCP 管理」页统一启停；需 STARDEW_MCP_ENABLED 也开。
+STARDEW_AUTONOMY_ENABLED = _bool(os.getenv("STARDEW_AUTONOMY_ENABLED", "false"))
+# 星露谷自主游玩心跳间隔（秒）
+STARDEW_AUTONOMY_INTERVAL = _float(os.getenv("STARDEW_AUTONOMY_INTERVAL", "30"), 30.0)
+# 星露谷自主游玩心跳：LLM 决策版（默认关）。开启后每轮由 LLM 基于游戏快照 + 星露谷工具
+# 自主选下一个动作；需要 LLM 适配器已装配；LLM 失败/不可用自动回退规则版。
+STARDEW_AUTONOMY_LLM_ENABLED = _bool(os.getenv("STARDEW_AUTONOMY_LLM_ENABLED", "false"))
+
+# ===================== TTS（GPT-SoVITS 语音合成） =====================
+# 让 LLM 的回复"说出来"：把最终回复文本交给本地 GPT-SoVITS 合成成人声并播放。
+# GPT-SoVITS 被当作外部服务（同 Ollama），跑在独立进程/端口（api_v2.py，默认 9880），
+# 与 MemBrain 后端解耦。默认全关：未启动 TTS 服务时绝不影响主流程。
+TTS_ENABLED = _bool(os.getenv("TTS_ENABLED", "false"))
+# GPT-SoVITS api_v2.py 服务地址
+TTS_HOST = os.getenv("TTS_HOST", "127.0.0.1").strip()
+TTS_PORT = _int(os.getenv("TTS_PORT"), 9880)
+# 参照音频路径 / 其转写文本与语言（合成时用的音色）。路径相对 GPT-SoVITS 服务运行目录解析。
+TTS_REF_AUDIO_PATH = os.getenv("TTS_REF_AUDIO_PATH", "").strip()
+TTS_PROMPT_TEXT = os.getenv("TTS_PROMPT_TEXT", "").strip()
+TTS_TEXT_LANG = os.getenv("TTS_TEXT_LANG", "zh").strip()
+TTS_PROMPT_LANG = os.getenv("TTS_PROMPT_LANG", "zh").strip()
+# 输出媒体类型：wav / ogg / aac（wav 与 winsound 播放最兼容）
+TTS_MEDIA_TYPE = os.getenv("TTS_MEDIA_TYPE", "wav").strip()
+# 语速（0.5-2.0）
+TTS_SPEED_FACTOR = _float(os.getenv("TTS_SPEED_FACTOR"), 1.0)
 
 # ===================== L3 主动信息池 =====================
 # 是否启用 L3 采集/推送（默认启用；设为 false 可关闭）
@@ -186,10 +212,14 @@ VISION_TIMEOUT = _float(os.getenv("VISION_TIMEOUT", "20"), 20.0)
 # ===================== 主动性心跳（低频、克制的主动开口判断） =====================
 # 总开关：默认关闭（避免打扰）。开启后由 ProactiveDecider 综合信号决定是否主动。
 PROACTIVITY_ENABLED = _bool(os.getenv("PROACTIVITY_ENABLED", "false"))
-# 主动最小间隔（分钟）：两次主动间最少间隔
+# 主动最小间隔（分钟）：两次主动间最少间隔（由 ProactiveDecider 节流执行）
 PROACTIVITY_MIN_INTERVAL_MIN = _int(os.getenv("PROACTIVITY_MIN_INTERVAL_MIN", "30"), 30)
 # 每日主动次数上限（0=不限）
 PROACTIVITY_DAILY_CAP = _int(os.getenv("PROACTIVITY_DAILY_CAP", "8"), 8)
+# 主动心跳扫描间隔（秒）：常驻线程每隔多久对在线用户评估一次"是否值得主动开口"。
+# 注意：实际是否会开口还受 PROACTIVITY_MIN_INTERVAL_MIN（分钟级节流）与每日封顶约束，
+# 因此这里只是一个"评估频率"，不会因调小就刷屏。
+PROACTIVITY_SCAN_INTERVAL = _int(os.getenv("PROACTIVITY_SCAN_INTERVAL", "60"), 60)
 
 
 
@@ -253,6 +283,9 @@ EDITABLE_KEYS = {
     "STARDEW_MCP_ENABLED": ("星露谷 MCP 扩展", "bool", STARDEW_MCP_ENABLED),
     "STARDEW_MEMORY_POLLER_ENABLED": ("星露谷记忆自动沉淀", "bool", _bool(os.getenv("STARDEW_MEMORY_POLLER_ENABLED", "false"))),
     "STARDEW_POLL_INTERVAL": ("星露谷状态轮询间隔(秒)", "float", float(os.getenv("STARDEW_POLL_INTERVAL", "60"))),
+    "STARDEW_AUTONOMY_ENABLED": ("星露谷自主游玩心跳", "bool", STARDEW_AUTONOMY_ENABLED),
+    "STARDEW_AUTONOMY_INTERVAL": ("星露谷自主游玩间隔(秒)", "float", STARDEW_AUTONOMY_INTERVAL),
+    "STARDEW_AUTONOMY_LLM_ENABLED": ("星露谷自主游玩心跳·LLM决策", "bool", STARDEW_AUTONOMY_LLM_ENABLED),
     "ENVIRONMENT_SENSING_ENABLED": ("浏览器感知（标签页/前台窗口/摘要）总开关", "bool", ENVIRONMENT_SENSING_ENABLED),
     "BROWSER_DEBUG_PORT": ("浏览器远程调试端口", "int", BROWSER_DEBUG_PORT),
     "BROWSER_TAB_SENSING_ENABLED": ("标签页感知（读当前浏览器标签）", "bool", BROWSER_TAB_SENSING_ENABLED),
@@ -265,17 +298,38 @@ EDITABLE_KEYS = {
     "PROACTIVITY_ENABLED": ("主动性心跳（低频主动开口）", "bool", PROACTIVITY_ENABLED),
     "PROACTIVITY_MIN_INTERVAL_MIN": ("主动最小间隔（分钟）", "int", PROACTIVITY_MIN_INTERVAL_MIN),
     "PROACTIVITY_DAILY_CAP": ("每日主动次数上限", "int", PROACTIVITY_DAILY_CAP),
+    "PROACTIVITY_SCAN_INTERVAL": ("主动心跳评估间隔(秒)", "int", PROACTIVITY_SCAN_INTERVAL),
     "VISION_ENABLED": ("本地视觉感知总开关（Ollama多模态→文本）", "bool", VISION_ENABLED),
     "VISION_MODEL": ("本地视觉模型名", "str", VISION_MODEL),
     "VISION_IN_CHAT": ("对话图片识别", "bool", VISION_IN_CHAT),
     "VISION_SCREEN_ON_DEMAND": ("桌面窗口识别（感知补充）", "bool", VISION_SCREEN_ON_DEMAND),
+    "TTS_ENABLED": ("TTS 语音合成总开关（GPT-SoVITS）", "bool", TTS_ENABLED),
+    "TTS_HOST": ("TTS 服务地址", "str", TTS_HOST),
+    "TTS_PORT": ("TTS 服务端口", "int", TTS_PORT),
+    "TTS_REF_AUDIO_PATH": ("TTS 参照音频路径（GPT-SoVITS 侧）", "str", TTS_REF_AUDIO_PATH),
+    "TTS_PROMPT_TEXT": ("TTS 参照音频转写文本", "str", TTS_PROMPT_TEXT),
+    "TTS_TEXT_LANG": ("TTS 合成文本语言", "str", TTS_TEXT_LANG),
+    "TTS_PROMPT_LANG": ("TTS 参照音频语言", "str", TTS_PROMPT_LANG),
+    "TTS_MEDIA_TYPE": ("TTS 输出格式(wav/ogg/aac)", "str", TTS_MEDIA_TYPE),
+    "TTS_SPEED_FACTOR": ("TTS 语速(0.5-2.0)", "float", TTS_SPEED_FACTOR),
 }
+
+# 需保留在 EDITABLE_KEYS 中以支持 update_config 持久化，但**不出现在「配置管理」页**的项。
+# 例如 TTS 相关项由专用「🔊 TTS 管理」页负责，避免与通用配置页重复/混淆。
+# 注意：这里保存的是「被隐藏展示」的 key；同时仍可被 update_config 修改（将其留存在 EDITABLE_KEYS）。
+CONFIG_HIDDEN_KEYS = frozenset({
+    "TTS_ENABLED", "TTS_HOST", "TTS_PORT", "TTS_REF_AUDIO_PATH",
+    "TTS_PROMPT_TEXT", "TTS_TEXT_LANG", "TTS_PROMPT_LANG",
+    "TTS_MEDIA_TYPE", "TTS_SPEED_FACTOR",
+})
 
 
 def get_config_snapshot() -> list:
-    """返回后台管理可读的配置列表"""
+    """返回后台管理可读的配置列表（不含被隐藏到专属页的项，如 TTS）"""
     result = []
     for key, (desc, dtype, _default) in EDITABLE_KEYS.items():
+        if key in CONFIG_HIDDEN_KEYS:
+            continue
         v = _current_value(key, dtype)
         # 未在 .env 显式配置时,显示模块默认值(便于后台看到当前生效值)
         if v is None:

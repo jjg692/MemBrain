@@ -16,20 +16,27 @@
   - 有料才开口：素材不够好 / 读不到一律 should_act=False（不伪造）
   - 节流状态仅内存（进程重启重置）
 
-用法（由低频调度线程驱动，本项目暂未接常驻线程）：
-    from core.proactivity import ProactiveDecider
+用法（由低频心跳线程驱动，见下方 ProactiveHeartbeat）：
+    from core.proactivity import ProactiveDecider, ProactiveHeartbeat
     decider = ProactiveDecider(relation=rel, perception=perception)
     act = decider.decide(user_id)
     if act["should_act"]:
         agent.proactive_message(user_id, trigger=act["trigger"], context=act["context"])
+
+    # 常驻心跳：低频评估"是否有值得主动开口的素材"，有则生成主动消息并推送
+    hb = ProactiveHeartbeat(agent_factory=af, perception=pm)
+    hb.start()   # daemon 线程
+    hb.stop()    # 退出时请求停止
 """
 
+import threading
 import time
 
 from core.config import (
     PROACTIVITY_ENABLED,
     PROACTIVITY_MIN_INTERVAL_MIN,
     PROACTIVITY_DAILY_CAP,
+    PROACTIVITY_SCAN_INTERVAL,
 )
 
 
@@ -197,3 +204,117 @@ class ProactiveDecider:
             "context": best["context"],
             "type": best["type"],
         }
+
+
+class ProactiveHeartbeat:
+    """主动性常驻心跳线程（harness 级，低频、克制）。
+
+    让已写好的 ProactiveDecider 真正"跑起来"：周期性对**当前在线用户**评估一次
+    "此刻是否有值得主动开口的素材"，有则生成主动消息并走 WS 推送。
+
+    设计（对齐 L3Pusher/ReminderScheduler 的既有模式，保持克制与不伪造）：
+      - 由 PROACTIVITY_ENABLED 总开关控制；关闭则线程立即退出，零开销。
+      - 只对在线用户主动（w s manager 的 user_ids），离线不打扰。
+      - 实际开口受 ProactiveDecider 内部节流约束（PROACTIVITY_MIN_INTERVAL_MIN +
+        每日封顶），这里只做低频评估，不会因扫描间隔小就刷屏。
+      - 主动消息由 agent.proactive_message 生成（模型在后台调用），
+        失败/false 一律静默，不伪造、不抛异常。
+      - 线程为 daemon，进程退出自动终止。
+    """
+
+    def __init__(self, agent_factory, perception=None, push_callback=None):
+        self.agent_factory = agent_factory
+        self.perception = perception
+        # push_callback: callable(user_id, data_dict) 用于 WS 推送; None 只记 L1
+        self.push_callback = push_callback
+        self._stop = threading.Event()
+        self._thread = None
+
+    # --------------------- 单次评估（可独立调用/测试） ---------------------
+
+    def heartbeat_once(self) -> int:
+        """对每个在线用户评估一次，若有要主动说的则生成并推送，返回主动条数。"""
+        if not PROACTIVITY_ENABLED:
+            return 0
+        try:
+            from api.websocket_manager import single_ws_manager
+            if hasattr(single_ws_manager, "user_ids"):
+                users = list(single_ws_manager.user_ids())
+            else:
+                users = list(single_ws_manager.get_all())
+        except Exception:
+            users = []
+        if not users:
+            return 0  # 无在线用户，不打扰
+        pushed = 0
+        for uid in users:
+            try:
+                agent = self.agent_factory.get_agent(uid, self._default_role())
+                rel = self._get_relation(agent)
+                decider = ProactiveDecider(relation=rel, perception=self.perception)
+                act = decider.decide(uid)
+                if not act.get("should_act"):
+                    continue
+                text = agent.proactive_message(
+                    uid, trigger=act.get("trigger", ""), context=act.get("context", "")
+                )
+                if not text:
+                    continue
+                if self.push_callback:
+                    data = {
+                        "type": "proactive",
+                        "role_id": getattr(agent, "role_id", ""),
+                        "content": text,
+                        "trigger": act.get("type", "proactive"),
+                        "via": "heartbeat",
+                    }
+                    self.push_callback(uid, data)
+                pushed += 1
+            except Exception:
+                # 单个用户失败不影响其他用户；静默跳过（不伪造、不抛）
+                continue
+        return pushed
+
+    def _get_relation(self, agent):
+        """取 agent 的关系记忆内核（惰性），失败返回 None（signals 会读不到即空）。"""
+        try:
+            return agent._get_relation()
+        except Exception:
+            return None
+
+    def _default_role(self):
+        try:
+            from core.memory.l3 import _default_role
+            return _default_role(self.agent_factory.initializer)
+        except Exception:
+            return "kasumi"
+
+    # --------------------- 线程生命周期 ---------------------
+
+    def start(self):
+        """启动 daemon 心跳线程（幂等）。"""
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._loop, args=(int(PROACTIVITY_SCAN_INTERVAL) or 60,), daemon=True
+        )
+        self._thread.start()
+
+    def stop(self):
+        """请求停止心跳线程。"""
+        self._stop.set()
+
+    def _loop(self, interval: int):
+        interval = max(10, interval)
+        while not self._stop.is_set():
+            start = time.time()
+            try:
+                n = self.heartbeat_once()
+                if n:
+                    from core.logger import log_info
+                    log_info("Proactive", f"本轮主动开口 {n} 条")
+            except Exception as e:
+                from core.logger import log_error
+                log_error("Proactive", f"心跳循环异常: {e}")
+            self._stop.wait(max(10, interval - (time.time() - start)))

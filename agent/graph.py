@@ -724,6 +724,32 @@ class LangGraphMemoryAgent:
         except Exception:
             pass
 
+        # 星露谷 MCP 能力引导：仅当 MCP 工具集里确有星露谷桥接工具时告知 LLM，
+        # 让 AI 伙伴能"自主"进场/感知/参与星露谷。未开扩展时不提（不伪造）。
+        try:
+            from core.tools import TOOL_REGISTRY
+            _has_stardew = any(
+                k.startswith("mcp_") and ("stardew_" in k) for k in TOOL_REGISTRY
+            )
+            _can_join = any(k.startswith("mcp_") and k.endswith("stardew_spawn")
+                            for k in TOOL_REGISTRY)
+        except Exception:
+            _has_stardew = False
+            _can_join = False
+        if _has_stardew:
+            join_cap = ("\n"
+                        "- **加入游戏**：用户邀请你一起进星露谷时，可调用 `mcp_*_stardew_spawn` 让宠物"
+                        "作为伙伴进入当前游戏世界，再用 `mcp_*_stardew_set_mode`（target=Companion1/2, mode=player）"
+                        "切换到直接控制模式，然后就能移动/互动/聊天。") if _can_join else ""
+            lines.append(
+                "【你的星露谷能力】你不仅能感知到星露谷游戏世界，还能真正参与其中。"
+                "当用户提到星露谷、想一起玩、或你感知到用户在玩星露谷时：\n"
+                "- 可以调用只读工具（`mcp_*_stardew_get_state` / `get_surroundings` / `get_inventory`）"
+                "读取游戏状态（时间/季节/天气/地点/金钱/背包/同伴）。\n"
+                f"- 写权限下还能用 `mcp_*_stardew_move_to` / `use_tool` / `interact` / `chat` / `attack` 做出行动。{join_cap}\n"
+                "- 自然地以角色身份参与，不要生硬地报'我调了工具'。读不到/未开启时如实说明，不要编造。"
+            )
+
         if room_context:
             lines.append("【当前群聊上下文】\n" + room_context)
         return "\n\n".join(lines)
@@ -760,6 +786,13 @@ class LangGraphMemoryAgent:
         def worker():
             self.memory.save_short_term(user_id, self.role_id, user_msg, reply)
             self.memory.judge_and_extract_facts(user_id, self.role_id, user_msg, reply)
+            # TTS：把 LLM 回复"说出来"（GPT-SoVITS）。默认关闭（TTS_ENABLED=false），
+            # 失败/未启动全部静默，绝不影响回复生成与推送。
+            try:
+                from core.tts_client import speak_reply
+                speak_reply(reply)
+            except Exception:
+                pass
             # 关系记忆内核：沉淀共同经历 + 周期反思（底层内在状态层，异步不阻塞回复）
             self._relation_after_reply(user_id, user_msg, reply, session)
             # 承诺兑现闭环：用户表达"谢谢/记得/办到了"等确认时，把相关承诺标记为已兑现

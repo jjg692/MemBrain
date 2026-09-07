@@ -23,8 +23,9 @@ from core.room.message_bus import MessageBus
 from core.room.room_manager import RoomManager
 from core.user_profile import UserProfile
 from core.reminder import ReminderStore, ReminderScheduler
-from core.config import REMINDER_SCAN_INTERVAL, PERCEPTION_ENABLED, PERCEPTION_CITY
+from core.config import REMINDER_SCAN_INTERVAL, PERCEPTION_ENABLED, PERCEPTION_CITY, PROACTIVITY_ENABLED
 from core.perception import MoodTrend, RoutineModel, PerceptionManager
+from core.proactivity import ProactiveHeartbeat
 
 from agent.graph import LangGraphMemoryAgent
 
@@ -56,6 +57,15 @@ class AgentFactory:
         """群聊用：按角色一个共享实例（用 __room__ 作为 user 维度）"""
         return self.get_agent("__room__", role_id)
 
+    def invalidate_all(self):
+        """清空 Agent 缓存，使下次 get_agent 重建实例。
+
+        用于 MCP 工具集运行时变更（启停 MCP 服务）后，强制 Agent 重新
+        构建（LangGraph 图会在 __init__ 时重新遍历 TOOL_REGISTRY，
+        从而拾取新增/移除的 mcp_* 工具）。
+        """
+        self._cache.clear()
+
 
 class AppInitializer:
     def __init__(self):
@@ -83,6 +93,22 @@ class AppInitializer:
 
         # Agent 工厂
         self.agent_factory = AgentFactory(self)
+
+        # MCP 服务注册中心（插件化启停 + 工具集动态同步）。
+        # 绑定 AgentFactory.invalidate_all：启停 MCP 后清空缓存，使下次会话重建 Agent 拾取新工具。
+        from core.mcp_registry import get_mcp_registry
+        self.mcp_registry = get_mcp_registry()
+        self.mcp_registry.agent_invalidator = self.agent_factory.invalidate_all
+        # 启动时加载 enabled 的 MCP 服务并注册工具（受 STARDEW_MCP_ENABLED 总开关控制）
+        try:
+            self.mcp_registry.load()
+        except Exception as e:
+            log_error("MCP", f"MCP 启动加载失败（跳过）: {e}")
+        # 为星露谷自主游玩心跳接线 LLM 适配器（LLM 决策版用；未开则空操作）
+        try:
+            self.mcp_registry.set_llm_adapter(self.llm_adapter)
+        except Exception as e:
+            log_error("MCP", f"接线星露谷心跳 LLM 适配器失败（跳过）: {e}")
 
         # L3 主动信息池（采集 + 推送）
         self.l3_collector = L3Collector(self.memory, self.tool_adapter)
@@ -112,6 +138,14 @@ class AppInitializer:
             configure_sensing(perception_manager=self.perception)
         except Exception:
             pass
+
+        # 主动性常驻心跳：低频评估"是否有值得主动开口的素材"，有则生成并推送。
+        # 仅当 PROACTIVITY_ENABLED 开启时 run（heartbeat_once 内部也二次判断）。
+        self.proactive_heartbeat = ProactiveHeartbeat(
+            agent_factory=self.agent_factory,
+            perception=self.perception,
+            push_callback=self._proactive_push_callback,
+        ) if PROACTIVITY_ENABLED else None
 
         # 星露谷运行时桥（可选扩展）：游戏状态自动沉淀记忆
         self.stardew_poller = None
@@ -177,6 +211,19 @@ class AppInitializer:
         except Exception as e:
             log_error("Reminder", f"提醒推送调度失败 {user_id}: {e}")
 
+    def _proactive_push_callback(self, user_id: str, data: dict):
+        """把主动性心跳生成的主动消息推送到用户私聊 WS（后台线程 → 事件循环）。"""
+        from api.websocket_manager import single_ws_manager
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    single_ws_manager.push_to_user(user_id, data), loop
+                )
+        except Exception as e:
+            log_error("Proactive", f"主动性推送调度失败 {user_id}: {e}")
+
     def start_reminder_scheduler(self):
         """启动提醒调度线程（幂等）"""
         if self.reminder_scheduler is not None:
@@ -212,6 +259,23 @@ class AppInitializer:
         if self.stardew_poller is not None:
             try:
                 self.stardew_poller.stop()
+            except Exception:
+                pass
+
+    def start_proactive_heartbeat(self):
+        """启动主动性常驻心跳（幂等）。仅 PROACTIVITY_ENABLED 时才有实例。"""
+        if self.proactive_heartbeat is not None:
+            try:
+                self.proactive_heartbeat.start()
+                log_info("Proactive", "主动心跳线程已启动")
+            except Exception as e:
+                log_error("Proactive", f"主动心跳启动失败: {e}")
+
+    def stop_proactive_heartbeat(self):
+        """请求停止主动心跳线程。"""
+        if self.proactive_heartbeat is not None:
+            try:
+                self.proactive_heartbeat.stop()
             except Exception:
                 pass
 

@@ -32,6 +32,31 @@ def _int(v, default):
 ROOM_RELAY_ROUNDS = _int(os.getenv("ROOM_RELAY_ROUNDS", ""), 2)
 
 
+# 星露谷"游戏行动"关键词闸门：只有这些意图的消息才喂给自主游玩心跳，避免每句
+# 闲聊都触发游戏决策。属于星露谷 MCP 扩展（插件域）归口，不污染主项目对话。
+_STARDEW_ACTION_HINTS = (
+    "种地", "种田", "浇水", "收割", "收获", "挖矿", "钓鱼", "一起", "出去",
+    "出来", "过来", "去农场", "去海边", "去矿山", "矿山", "农场", "干活",
+    "帮我", "跟我", "陪我去", "撒种", "锄", "种", "收", "砍", "捡", "喂",
+)
+
+
+def _feed_stardew_command(initializer, content: str):
+    """若有星露谷行动意图，把指令喂给自主游玩心跳（有指令听指令）。"""
+    text = (content or "").strip()
+    if not text:
+        return
+    if not any(h in text for h in _STARDEW_ACTION_HINTS):
+        return
+    mcp = getattr(initializer, "mcp_registry", None)
+    if mcp is None:
+        return
+    feed = getattr(mcp, "feed_heartbeat_command", None)
+    if feed is None:
+        return
+    feed(text)
+
+
 def setup_websocket(app) -> AppInitializer:
     return app
 
@@ -70,6 +95,14 @@ def register(app, initializer: AppInitializer):
                     continue
                 if not content:
                     continue
+
+                # 星露谷扩展归口：用户消息若带有"游戏行动"意味（一起出去/种地/浇水/
+                # 收割/挖矿/钓鱼/过来/农场/去XX/干活 等），喂给自主游玩心跳，让它
+                # "有指令听指令"真的在游戏里动起来（插件域，不影响主项目对话）。
+                try:
+                    _feed_stardew_command(initializer, content)
+                except Exception:
+                    pass
 
                 agent = initializer.agent_factory.get_agent(user_id, new_role)
                 # 通知前端开始处理（广播给该 user 的所有窗口）

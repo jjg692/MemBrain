@@ -503,39 +503,10 @@ try:
 except Exception:
     pass
 
-# MCP 客户端骨架：动态发现并注册外部工具（游戏 MCP 等）。
-# 受 STARDEW_MCP_ENABLED 总开关控制（默认关闭，规避他人拉取无游戏/无环境也受影响）。
-# 关闭时完全不启动 MCP server、不注册工具（LLM 看不到）；开启时才加载。
-# 即便开启但 server 启动失败，也 try/except 静默降级，不影响既有功能。
-_mcp = None
-try:
-    from core.config import STARDEW_MCP_ENABLED
-except Exception:
-    STARDEW_MCP_ENABLED = False
-if STARDEW_MCP_ENABLED:
-    try:
-        from core.mcp_client import get_mcp_manager, McpError
-        _mcp = get_mcp_manager()
-        _mcp.load()
-        if _mcp.servers:
-            ALL_TOOLS.extend(_mcp.schemas())
-            # 记录每个 MCP 工具的原始描述（供 docstring 复用，避免 LangGraph 因缺描述失败）
-            _schema_by_name = {s["function"]["name"]: s["function"].get("description", "")
-                               for s in _mcp.schemas()}
-            for tname in _mcp.tool_names():
-                def _mk(tname):
-                    desc = _schema_by_name.get(tname, tname)
-                    def _call(arguments=None, **kw):
-                        """调用外部 MCP 工具（星露谷游戏等）。"""
-                        return _mcp.call(tname, arguments or kw)
-                    # 覆盖 docstring 为原始工具描述，LangChain tool() 依赖它
-                    _call.__doc__ = desc or "调用外部 MCP 工具。"
-                    return _call
-                TOOL_REGISTRY[tname] = _mk(tname)
-    except Exception as e:
-        from core.logger import log_error
-        log_error("MCP", f"MCP 注册失败（跳过）: {e}")
-        _mcp = None
+# MCP 服务工具集（插件化）。
+# MCP 服务的加载/启停由 core.mcp_registry 全权管理（配合 config/mcp.json 的
+# enabled 开关与 STARDEW_MCP_ENABLED 总开关），运行时动态增删 mcp_* 工具。
+# 此处无需静态持有 MCP 引用；registry 直接引用本模块的 ALL_TOOLS / TOOL_REGISTRY。
 
 
 def execute_tool(name: str, arguments: dict) -> str:
