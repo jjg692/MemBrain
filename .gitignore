@@ -32,6 +32,15 @@ relation_memory_*.json
 # 整个 stardew/ 目录从 git 跟踪中移除（本地保留），不再纳入版本库。
 # 含第三方 StardewValley-MCP server 与项目自制接入代码。
 /stardew/
+# 依赖 stardew/ 的星露谷测试文件也一并移出（本地保留），避免仓库缺模块引用
+test/fake_stardew_mcp.py
+test/stardew_test.py
+test/stardew_e2e_test.py
+test/ollama/test_stardew_runtime.py
+
+# ===================== 本地工具（tools/） =====================
+# 星露谷程序集分析临时工具（.NET/Mono.Cecil），本地保留，不入库
+/tools/
 
 # ===================== 红警 MO 接入插件（redalertmo/） =====================
 # 实机接入（C++ DLL 逆向）已暂停，不进仓库。整目录忽略，保留本地。
