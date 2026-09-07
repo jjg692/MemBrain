@@ -186,10 +186,14 @@ VISION_TIMEOUT = _float(os.getenv("VISION_TIMEOUT", "20"), 20.0)
 # ===================== 主动性心跳（低频、克制的主动开口判断） =====================
 # 总开关：默认关闭（避免打扰）。开启后由 ProactiveDecider 综合信号决定是否主动。
 PROACTIVITY_ENABLED = _bool(os.getenv("PROACTIVITY_ENABLED", "false"))
-# 主动最小间隔（分钟）：两次主动间最少间隔
+# 主动最小间隔（分钟）：两次主动间最少间隔（由 ProactiveDecider 节流执行）
 PROACTIVITY_MIN_INTERVAL_MIN = _int(os.getenv("PROACTIVITY_MIN_INTERVAL_MIN", "30"), 30)
 # 每日主动次数上限（0=不限）
 PROACTIVITY_DAILY_CAP = _int(os.getenv("PROACTIVITY_DAILY_CAP", "8"), 8)
+# 主动心跳扫描间隔（秒）：常驻线程每隔多久对在线用户评估一次"是否值得主动开口"。
+# 注意：实际是否会开口还受 PROACTIVITY_MIN_INTERVAL_MIN（分钟级节流）与每日封顶约束，
+# 因此这里只是一个"评估频率"，不会因调小就刷屏。
+PROACTIVITY_SCAN_INTERVAL = _int(os.getenv("PROACTIVITY_SCAN_INTERVAL", "60"), 60)
 
 
 
@@ -265,6 +269,7 @@ EDITABLE_KEYS = {
     "PROACTIVITY_ENABLED": ("主动性心跳（低频主动开口）", "bool", PROACTIVITY_ENABLED),
     "PROACTIVITY_MIN_INTERVAL_MIN": ("主动最小间隔（分钟）", "int", PROACTIVITY_MIN_INTERVAL_MIN),
     "PROACTIVITY_DAILY_CAP": ("每日主动次数上限", "int", PROACTIVITY_DAILY_CAP),
+    "PROACTIVITY_SCAN_INTERVAL": ("主动心跳评估间隔(秒)", "int", PROACTIVITY_SCAN_INTERVAL),
     "VISION_ENABLED": ("本地视觉感知总开关（Ollama多模态→文本）", "bool", VISION_ENABLED),
     "VISION_MODEL": ("本地视觉模型名", "str", VISION_MODEL),
     "VISION_IN_CHAT": ("对话图片识别", "bool", VISION_IN_CHAT),

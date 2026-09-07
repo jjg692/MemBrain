@@ -23,8 +23,9 @@ from core.room.message_bus import MessageBus
 from core.room.room_manager import RoomManager
 from core.user_profile import UserProfile
 from core.reminder import ReminderStore, ReminderScheduler
-from core.config import REMINDER_SCAN_INTERVAL, PERCEPTION_ENABLED, PERCEPTION_CITY
+from core.config import REMINDER_SCAN_INTERVAL, PERCEPTION_ENABLED, PERCEPTION_CITY, PROACTIVITY_ENABLED
 from core.perception import MoodTrend, RoutineModel, PerceptionManager
+from core.proactivity import ProactiveHeartbeat
 
 from agent.graph import LangGraphMemoryAgent
 
@@ -113,6 +114,14 @@ class AppInitializer:
         except Exception:
             pass
 
+        # 主动性常驻心跳：低频评估"是否有值得主动开口的素材"，有则生成并推送。
+        # 仅当 PROACTIVITY_ENABLED 开启时 run（heartbeat_once 内部也二次判断）。
+        self.proactive_heartbeat = ProactiveHeartbeat(
+            agent_factory=self.agent_factory,
+            perception=self.perception,
+            push_callback=self._proactive_push_callback,
+        ) if PROACTIVITY_ENABLED else None
+
         # 星露谷运行时桥（可选扩展）：游戏状态自动沉淀记忆
         self.stardew_poller = None
         try:
@@ -177,6 +186,19 @@ class AppInitializer:
         except Exception as e:
             log_error("Reminder", f"提醒推送调度失败 {user_id}: {e}")
 
+    def _proactive_push_callback(self, user_id: str, data: dict):
+        """把主动性心跳生成的主动消息推送到用户私聊 WS（后台线程 → 事件循环）。"""
+        from api.websocket_manager import single_ws_manager
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    single_ws_manager.push_to_user(user_id, data), loop
+                )
+        except Exception as e:
+            log_error("Proactive", f"主动性推送调度失败 {user_id}: {e}")
+
     def start_reminder_scheduler(self):
         """启动提醒调度线程（幂等）"""
         if self.reminder_scheduler is not None:
@@ -212,6 +234,23 @@ class AppInitializer:
         if self.stardew_poller is not None:
             try:
                 self.stardew_poller.stop()
+            except Exception:
+                pass
+
+    def start_proactive_heartbeat(self):
+        """启动主动性常驻心跳（幂等）。仅 PROACTIVITY_ENABLED 时才有实例。"""
+        if self.proactive_heartbeat is not None:
+            try:
+                self.proactive_heartbeat.start()
+                log_info("Proactive", "主动心跳线程已启动")
+            except Exception as e:
+                log_error("Proactive", f"主动心跳启动失败: {e}")
+
+    def stop_proactive_heartbeat(self):
+        """请求停止主动心跳线程。"""
+        if self.proactive_heartbeat is not None:
+            try:
+                self.proactive_heartbeat.stop()
             except Exception:
                 pass
 
