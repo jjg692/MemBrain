@@ -69,27 +69,18 @@ class McpRegistry:
             self._registered.add(server_name)
 
     def _maybe_register_stardew_join(self, has_stardew_spawn: bool):
-        """检测到星露谷桥接工具时，注册 stardew_join 高阶工具（幂等）。"""
-        from core import tools
+        """检测到星露谷桥接工具时，注册 stardew_join 高阶工具（幂等）。
+
+        星露谷特有逻辑已收敛到 stardew.boot（boot.register_join_tool），
+        这里只做委托，不内嵌星露谷实现。
+        """
         if not has_stardew_spawn:
             return
-        if "stardew_join" in tools.TOOL_REGISTRY:
-            return
-
-        def _join(arguments=None, **kw):
-            try:
-                from stardew.autonomy import StardewAutonomy
-                au = StardewAutonomy(memory_bridge=None)
-                return au.enter_game("default_user",
-                                     companion=(arguments or kw).get("companion"),
-                                     auto_join_mode=(arguments or kw).get("mode", "player"))
-            except Exception as e:
-                return f"加入失败: {e}"
-        _join.__doc__ = ("让 AI 伙伴作为同伴加入当前星露谷游戏世界（spawn），"
-                         "并可选设为指定模式（player=直接控制 / follow/farm/mine/fish/stay=自主模式）。"
-                         "参数 companion 可选（Companion1/Companion2），mode 默认 player。"
-                         "用户邀请一起进星露谷时调用本工具。")
-        tools.TOOL_REGISTRY["stardew_join"] = _join
+        try:
+            from stardew.boot import register_join_tool
+            register_join_tool()
+        except Exception:
+            pass
         # schema 由 _sync_all_tools 统一维护（调用方随后会调用它）
 
     def _unregister_tools(self, server_name: str):
@@ -231,17 +222,19 @@ class McpRegistry:
     # ---------------- 星露谷自主游玩心跳（MCP 扩展） ----------------
 
     def ensure_heartbeat(self):
-        """惰性构建星露谷自主游玩心跳（作为 MCP 扩展由后台统一管理）。"""
+        """惰性构建星露谷自主游玩心跳（作为 MCP 扩展由后台统一管理）。
+
+        星露谷特有逻辑已收敛到 stardew.boot（boot.build_heartbeat），
+        这里只做委托，不内嵌星露谷实现。
+        """
         if getattr(self, "_heartbeat", None) is None:
             try:
                 from core.config import STARDEW_AUTONOMY_INTERVAL, STARDEW_AUTONOMY_LLM_ENABLED
-                from stardew.heartbeat import StardewHeartbeat
-                heartbeat = StardewHeartbeat(
+                from stardew.boot import build_heartbeat
+                self._heartbeat = build_heartbeat(
                     interval=float(STARDEW_AUTONOMY_INTERVAL),
-                    enabled=False,  # 默认关，由后台开关控制
                     llm_enabled=bool(STARDEW_AUTONOMY_LLM_ENABLED),
                 )
-                self._heartbeat = heartbeat
             except Exception as e:
                 log_error("MCP", f"构建星露谷自主游玩心跳失败: {e}")
                 self._heartbeat = None

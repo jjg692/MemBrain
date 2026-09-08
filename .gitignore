@@ -41,6 +41,9 @@ test/fake_stardew_mcp.py
 test/stardew_test.py
 test/stardew_e2e_test.py
 test/ollama/test_stardew_runtime.py
+test/ollama/test_heartbeat.py
+test/ollama/test_autonomy.py
+test/ollama/test_game_memory.py
 
 # ===================== 本地工具（tools/） =====================
 /tools/

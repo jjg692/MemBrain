@@ -726,8 +726,10 @@ class LangGraphMemoryAgent:
 
         # 星露谷 MCP 能力引导：仅当 MCP 工具集里确有星露谷桥接工具时告知 LLM，
         # 让 AI 伙伴能"自主"进场/感知/参与星露谷。未开扩展时不提（不伪造）。
+        # 文本生成已收敛到 stardew.boot.capability_text，主代码只做依赖调用。
         try:
             from core.tools import TOOL_REGISTRY
+            from stardew.boot import capability_text
             _has_stardew = any(
                 k.startswith("mcp_") and ("stardew_" in k) for k in TOOL_REGISTRY
             )
@@ -737,18 +739,9 @@ class LangGraphMemoryAgent:
             _has_stardew = False
             _can_join = False
         if _has_stardew:
-            join_cap = ("\n"
-                        "- **加入游戏**：用户邀请你一起进星露谷时，可调用 `mcp_*_stardew_spawn` 让宠物"
-                        "作为伙伴进入当前游戏世界，再用 `mcp_*_stardew_set_mode`（target=Companion1/2, mode=player）"
-                        "切换到直接控制模式，然后就能移动/互动/聊天。") if _can_join else ""
-            lines.append(
-                "【你的星露谷能力】你不仅能感知到星露谷游戏世界，还能真正参与其中。"
-                "当用户提到星露谷、想一起玩、或你感知到用户在玩星露谷时：\n"
-                "- 可以调用只读工具（`mcp_*_stardew_get_state` / `get_surroundings` / `get_inventory`）"
-                "读取游戏状态（时间/季节/天气/地点/金钱/背包/同伴）。\n"
-                f"- 写权限下还能用 `mcp_*_stardew_move_to` / `use_tool` / `interact` / `chat` / `attack` 做出行动。{join_cap}\n"
-                "- 自然地以角色身份参与，不要生硬地报'我调了工具'。读不到/未开启时如实说明，不要编造。"
-            )
+            _cap = capability_text(_has_stardew, _can_join)
+            if _cap:
+                lines.append(_cap)
 
         if room_context:
             lines.append("【当前群聊上下文】\n" + room_context)
