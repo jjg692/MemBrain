@@ -293,6 +293,69 @@ def setup_admin(app):
             return {"code": -1, "message": "不可修改的配置项"}
         return {"code": 0, "message": f"{key} 已更新并持久化到 .env"}
 
+    # ===================== TTS 语音合成管理 =====================
+
+    @router.get("/tts/status")
+    async def tts_status():
+        """返回 TTS 当前状态与配置（开关/地址/参照音频等）。动态读取，无需重启。"""
+        try:
+            from core.tts_client import status as tts_status_fn
+            return {"code": 0, "data": tts_status_fn()}
+        except Exception as e:
+            log_error("admin.tts.status", e)
+            return {"code": -1, "message": f"读取 TTS 状态失败: {e}"}
+
+    @router.post("/tts/save")
+    async def tts_save(request: Request):
+        """保存 TTS 配置到 .env（含开关），即时生效（动态读取）。"""
+        body = await request.json()
+        mapping = {
+            "TTS_ENABLED": "bool", "TTS_HOST": "str", "TTS_PORT": "str",
+            "TTS_REF_AUDIO_PATH": "str", "TTS_PROMPT_TEXT": "str",
+            "TTS_TEXT_LANG": "str", "TTS_PROMPT_LANG": "str",
+            "TTS_MEDIA_TYPE": "str", "TTS_SPEED_FACTOR": "str",
+        }
+        updated = []
+        for key, dtype in mapping.items():
+            if key in body:
+                val = body[key]
+                if dtype == "bool":
+                    val = "true" if str(val).strip().lower() in ("1", "true", "yes", "on") else "false"
+                elif val is None:
+                    val = ""
+                if not update_config(key, str(val)):
+                    return {"code": -1, "message": f"不可修改的配置项 {key}"}
+                updated.append(key)
+        return {"code": 0, "message": f"TTS 配置已保存并生效（{len(updated)} 项）"}
+
+    @router.post("/tts/test")
+    async def tts_test(request: Request):
+        """测试 GPT-SoVITS 服务连通性（读 /tts 存活）+ 可选合成一小段。"""
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        try:
+            text = (body.get("text") or "").strip() or "你好呀，我是你的语音助手。"
+            from core.tts_client import TTSClient
+            client = TTSClient()
+            # 1) 连通性
+            alive = client.health()
+            if not alive:
+                return {"code": -1, "data": {"ok": False, "synth": False},
+                        "message": "无法连接 GPT-SoVITS 服务（请先启动 api_v2.py）"}
+            # 2) 综合
+            audio = client.synthesize(text, timeout=30.0)
+            if not audio:
+                return {"code": -1, "data": {"ok": True, "synth": False},
+                        "message": "服务在线，但合成失败（检查参照音频路径/文本语言）"}
+            return {"code": 0, "data": {"ok": True, "synth": True, "bytes": len(audio)},
+                    "message": f"服务在线，合成成功（{len(audio)} 字节）"}
+        except Exception as e:
+            log_error("admin.tts.test", e)
+            return {"code": -1, "message": f"测试失败: {e}"}
+
     # ===================== 星露谷 MCP 管理 =====================
 
     @router.get("/stardew/status")
@@ -373,5 +436,140 @@ def setup_admin(app):
         except Exception as e:
             log_error("admin.stardew.refresh", e)
             return {"code": -1, "message": f"刷新失败: {e}"}
+
+    # ===================== MCP 服务管理（插件化启停） =====================
+
+    @router.get("/mcp/status")
+    async def mcp_status():
+        """列出所有配置的 MCP 服务状态（运行/启用/工具数/错误）。"""
+        try:
+            registry = getattr(app, "mcp_registry", None)
+            if registry is None:
+                return {"code": -1, "message": "MCP 注册中心未初始化"}
+            items = registry.status_all()
+            return {"code": 0, "data": items}
+        except Exception as e:
+            log_error("admin.mcp.status", e)
+            return {"code": -1, "message": f"读取失败: {e}"}
+
+    # ============ 星露谷自主游玩心跳（星露谷 MCP 扩展） ============
+    # 注意：这些静态路径必须声明在 /mcp/{name}/... 通配之前，否则 FastAPI 会把
+    # "stardew-autonomy" 当成 {name} 捕获，导致 "未找到 MCP server 配置"。
+
+    @router.get("/mcp/stardew-autonomy/status")
+    async def mcp_stardew_autonomy_status():
+        try:
+            registry = getattr(app, "mcp_registry", None)
+            if registry is None:
+                return {"code": -1, "message": "MCP 注册中心未初始化"}
+            return {"code": 0, "data": registry.heartbeat_status()}
+        except Exception as e:
+            log_error("admin.mcp.autonomy", e)
+            return {"code": -1, "message": f"读取失败: {e}"}
+
+    @router.post("/mcp/stardew-autonomy/start")
+    async def mcp_stardew_autonomy_start():
+        try:
+            registry = getattr(app, "mcp_registry", None)
+            if registry is None:
+                return {"code": -1, "message": "MCP 注册中心未初始化"}
+            res = registry.start_heartbeat()
+            return {"code": 0 if res.get("ok") else -1, "data": res, "message": res.get("message", "")}
+        except Exception as e:
+            log_error("admin.mcp.autonomy", e)
+            return {"code": -1, "message": f"启动失败: {e}"}
+
+    @router.post("/mcp/stardew-autonomy/stop")
+    async def mcp_stardew_autonomy_stop():
+        try:
+            registry = getattr(app, "mcp_registry", None)
+            if registry is None:
+                return {"code": -1, "message": "MCP 注册中心未初始化"}
+            res = registry.stop_heartbeat()
+            return {"code": 0 if res.get("ok") else -1, "data": res, "message": res.get("message", "")}
+        except Exception as e:
+            log_error("admin.mcp.autonomy", e)
+            return {"code": -1, "message": f"停止失败: {e}"}
+
+    @router.post("/mcp/stardew-autonomy/llm")
+    async def mcp_stardew_autonomy_llm(request: Request):
+        """切换星露谷自主游玩心跳的 LLM 决策开关。"""
+        try:
+            body = await request.json()
+            registry = getattr(app, "mcp_registry", None)
+            if registry is None:
+                return {"code": -1, "message": "MCP 注册中心未初始化"}
+            res = registry.set_heartbeat_llm(bool(body.get("enabled", False)))
+            return {"code": 0 if res.get("ok") else -1, "data": res, "message": res.get("message", "")}
+        except Exception as e:
+            log_error("admin.mcp.autonomy", e)
+            return {"code": -1, "message": f"切换失败: {e}"}
+
+    @router.post("/mcp/{name}/start")
+    async def mcp_start(name: str):
+        """启动单个 MCP 服务（插件化）。"""
+        try:
+            registry = getattr(app, "mcp_registry", None)
+            if registry is None:
+                return {"code": -1, "message": "MCP 注册中心未初始化"}
+            res = registry.start(name)
+            return {"code": 0 if res.get("ok") else -1, "data": res, "message": res.get("message", "")}
+        except Exception as e:
+            log_error("admin.mcp.start", e)
+            return {"code": -1, "message": f"启动失败: {e}"}
+
+    @router.post("/mcp/{name}/stop")
+    async def mcp_stop(name: str):
+        """停止单个 MCP 服务（插件化），并注销其工具。"""
+        try:
+            registry = getattr(app, "mcp_registry", None)
+            if registry is None:
+                return {"code": -1, "message": "MCP 注册中心未初始化"}
+            res = registry.stop(name)
+            return {"code": 0 if res.get("ok") else -1, "data": res, "message": res.get("message", "")}
+        except Exception as e:
+            log_error("admin.mcp.stop", e)
+            return {"code": -1, "message": f"停止失败: {e}"}
+
+    @router.post("/mcp/{name}/restart")
+    async def mcp_restart(name: str):
+        """重启单个 MCP 服务。"""
+        try:
+            registry = getattr(app, "mcp_registry", None)
+            if registry is None:
+                return {"code": -1, "message": "MCP 注册中心未初始化"}
+            res = registry.restart(name)
+            return {"code": 0 if res.get("ok") else -1, "data": res, "message": res.get("message", "")}
+        except Exception as e:
+            log_error("admin.mcp.restart", e)
+            return {"code": -1, "message": f"重启失败: {e}"}
+
+    @router.post("/mcp/{name}/test")
+    async def mcp_test(name: str):
+        """测试指定 MCP 服务链路（尝试 tools/list）。"""
+        try:
+            registry = getattr(app, "mcp_registry", None)
+            if registry is None:
+                return {"code": -1, "message": "MCP 注册中心未初始化"}
+            res = registry.test(name)
+            return {"code": 0 if res.get("ok") else -1, "data": res, "message": res.get("message", "")}
+        except Exception as e:
+            log_error("admin.mcp.test", e)
+            return {"code": -1, "message": f"测试失败: {e}"}
+
+    @router.post("/mcp/{name}/enabled")
+    async def mcp_set_enabled(name: str, request: Request):
+        """持久化 MCP 服务的 enabled 开关到 config/mcp.json（重启后端或手动 start 生效）。"""
+        try:
+            body = await request.json()
+            registry = getattr(app, "mcp_registry", None)
+            if registry is None:
+                return {"code": -1, "message": "MCP 注册中心未初始化"}
+            res = registry.set_enabled(name, bool(body.get("enabled", False)))
+            return {"code": 0 if res.get("ok") else -1, "data": res,
+                    "message": "已保存开关（启用后需点「启动」或重启后端生效）"}
+        except Exception as e:
+            log_error("admin.mcp.enabled", e)
+            return {"code": -1, "message": f"保存失败: {e}"}
 
     return router

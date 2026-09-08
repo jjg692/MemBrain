@@ -1,14 +1,16 @@
 {
-  "_comment": "MCP 客户端配置。每个 server: {command, args, env}。暴露的工具会自动注册到 LLM。由 core/config.py 的 STARDEW_MCP_ENABLED 总开关控制是否加载。路径可用 {PROJECT_ROOT} 占位符锚定到项目根。现代服务使用 luy-0/StardewValley-MCP（uv + Python MCP 服务器 + SMAPI Mod，TCP/protobuf/共享秘钥握手）。共享秘钥(≥32字节 base64) 由 Mod 首次启动时生成于 Mods/StardewValleyMCP/config.json，请将它填入下面 SHARED_SECRET。只读(默认) 用 ["serve"]；允许操作游戏加 --allow-write。",
+  "_comment": "MCP 客户端配置（可插拔插件格式）。每个 server: {name, command, args, env, enabled}。后台「MCP 管理页」可对 enabled 启停（无需重启后端）：启用的服务启动后其工具自动注册到 LLM，停止则注销。路径可用 {PROJECT_ROOT} 占位符锚定到项目根。\n\n当前星露谷接入的是仓库自带 Node 桥接（StardewMCPBridge，stardew/StardewValley-MCP/）：mcp-server 是 Node MCP 服务器，SMAPI Mod（C#）负责在游戏里生成同伴（Player2/3）并通过文件（bridge_data.json / actions/）与 MCP 服务器通信。共 25 个工具：stardew_spawn/follow/set_mode/get_state/chat/move_to/use_tool/interact/...\n\nenv 说明（务必指向游戏真实 Mod 目录，否则读不到状态 / 命令进不了游戏）：\n- STARDEW_BRIDGE_PATH：SMAPI Mod 写入的 game state 文件（bridge_data.json），位于游戏 Mods/StardewMCPBridge/。\n- STARDEW_ACTION_DIR：SMAPI Mod 消费的命令队列目录（actions/），同样位于游戏 Mods/StardewMCPBridge/。\n\n游戏路径（本机）：E:\\SteamLibrary\\steamapps\\common\\Stardew Valley\\Mods\\StardewMCPBridge\n\nenabled=false 表示默认不启动；确认游戏以 SMAPI 启动并加载存档后，在后台「启动」该服务即可。",
   "servers": [
     {
       "name": "stardew",
-      "command": "stardew-valley-mcp",
-      "args": ["serve", "--allow-write"],
+      "command": "node",
+      "args": [
+        "{PROJECT_ROOT}/stardew/StardewValley-MCP/mcp-server/build/index.js"
+      ],
+      "enabled": false,
       "env": {
-        "STARDEW_VALLEY_MCP_HOST": "127.0.0.1",
-        "STARDEW_VALLEY_MCP_PORT": "24642",
-        "STARDEW_VALLEY_MCP_SHARED_SECRET": "<填入 Mod config.json 中的 SharedSecretBase64>"
+        "STARDEW_BRIDGE_PATH": "E:\\SteamLibrary\\steamapps\\common\\Stardew Valley\\Mods\\StardewMCPBridge\\bridge_data.json",
+        "STARDEW_ACTION_DIR": "E:\\SteamLibrary\\steamapps\\common\\Stardew Valley\\Mods\\StardewMCPBridge\\actions"
       }
     }
   ]

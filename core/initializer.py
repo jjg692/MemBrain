@@ -57,6 +57,15 @@ class AgentFactory:
         """群聊用：按角色一个共享实例（用 __room__ 作为 user 维度）"""
         return self.get_agent("__room__", role_id)
 
+    def invalidate_all(self):
+        """清空 Agent 缓存，使下次 get_agent 重建实例。
+
+        用于 MCP 工具集运行时变更（启停 MCP 服务）后，强制 Agent 重新
+        构建（LangGraph 图会在 __init__ 时重新遍历 TOOL_REGISTRY，
+        从而拾取新增/移除的 mcp_* 工具）。
+        """
+        self._cache.clear()
+
 
 class AppInitializer:
     def __init__(self):
@@ -84,6 +93,22 @@ class AppInitializer:
 
         # Agent 工厂
         self.agent_factory = AgentFactory(self)
+
+        # MCP 服务注册中心（插件化启停 + 工具集动态同步）。
+        # 绑定 AgentFactory.invalidate_all：启停 MCP 后清空缓存，使下次会话重建 Agent 拾取新工具。
+        from core.mcp_registry import get_mcp_registry
+        self.mcp_registry = get_mcp_registry()
+        self.mcp_registry.agent_invalidator = self.agent_factory.invalidate_all
+        # 启动时加载 enabled 的 MCP 服务并注册工具（受 STARDEW_MCP_ENABLED 总开关控制）
+        try:
+            self.mcp_registry.load()
+        except Exception as e:
+            log_error("MCP", f"MCP 启动加载失败（跳过）: {e}")
+        # 为星露谷自主游玩心跳接线 LLM 适配器（LLM 决策版用；未开则空操作）
+        try:
+            self.mcp_registry.set_llm_adapter(self.llm_adapter)
+        except Exception as e:
+            log_error("MCP", f"接线星露谷心跳 LLM 适配器失败（跳过）: {e}")
 
         # L3 主动信息池（采集 + 推送）
         self.l3_collector = L3Collector(self.memory, self.tool_adapter)

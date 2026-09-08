@@ -78,9 +78,11 @@
     <div class="snav-sep"></div>
     <div class="snav-item" data-panel="stats">📊 系统统计</div>
     <div class="snav-item" data-panel="llm">🤖 LLM 管理</div>
+    <div class="snav-item" data-panel="tts">🔊 TTS 语音</div>
     <div class="snav-item" data-panel="config">⚙️ 配置管理</div>
     <div class="snav-sep"></div>
     <div class="snav-item" data-panel="stardew">🌾 星露谷</div>
+    <div class="snav-item" data-panel="mcp">📦 MCP 管理</div>
   </div>
   <div class="content">
 
@@ -226,6 +228,46 @@
     </div>
   </div>
 
+  <!-- ===== TTS 语音合成 ===== -->
+  <div class="panel" id="panel-tts">
+    <div class="card">
+      <h3>🔊 TTS 语音合成（GPT-SoVITS）</h3>
+      <p class="hint" style="margin-bottom:12px">让 LLM 的回复"说出来"：本地 GPT-SoVITS 服务（api_v2.py）把回复文本合成成人声播放。GPT-SoVITS 作为外部服务运行（独立端口），本页统一管理其开关与参数。默认<span style="color:#e6a23c">关闭</span>。</p>
+      <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:16px">
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:14px; font-weight:600">
+          <input type="checkbox" id="ttsEnabledToggle" onchange="ttsToggle(this.checked)" style="width:auto; transform:scale(1.2)">
+          <span id="ttsEnabledLabel">TTS：关闭</span>
+        </label>
+        <button class="btn btn-blue" onclick="ttsTest()">🔌 测试服务（合成一段）</button>
+        <button class="btn btn-gray" onclick="loadTts()">🔄 刷新</button>
+        <span class="hint" id="ttsStatus"></span>
+      </div>
+      <div class="form-row">
+        <div style="flex:0 0 200px"><label>服务地址</label><input id="ttsHost" placeholder="127.0.0.1"></div>
+        <div style="flex:0 0 160px"><label>端口</label><input id="ttsPort" placeholder="9880"></div>
+        <div style="flex:0 0 160px"><label>合成语言 (text_lang)</label><input id="ttsTextLang" placeholder="zh"></div>
+        <div style="flex:0 0 160px"><label>输出格式</label>
+          <select id="ttsMediaType">
+            <option value="wav">wav（推荐）</option>
+            <option value="ogg">ogg</option>
+            <option value="aac">aac</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div style="flex:2"><label>参照音频路径（GPT-SoVITS 侧）</label><input id="ttsRefAudio" placeholder="D:\\...\\戸山香澄（仮）\\(ZH)...mp3"></div>
+        <div style="flex:1"><label>参照音频转写文本 (prompt_text)</label><input id="ttsPromptText" placeholder="参照音频里说的那句话"></div>
+        <div style="flex:0 0 160px"><label>参照语言 (prompt_lang)</label><input id="ttsPromptLang" placeholder="zh"></div>
+        <div style="flex:0 0 140px"><label>语速 (0.5-2.0)</label><input id="ttsSpeed" type="number" min="0.5" max="2" step="0.1" placeholder="1.0"></div>
+      </div>
+      <div style="display:flex; gap:10px; margin-top:6px">
+        <button class="btn btn-green" onclick="saveTts()">💾 保存设置</button>
+        <span class="hint" style="align-self:center">保存即写入 .env 并即时生效（无需重启后端）。</span>
+      </div>
+      <p class="hint" style="margin-top:12px">启动 GPT-SoVITS 服务方式：<code>python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml</code>。「测试服务」会先探测端口连通性，再真实合成一小段验证参照音频配置。</p>
+    </div>
+  </div>
+
   <!-- ===== 配置 ===== -->
   <div class="panel" id="panel-config">
     <div class="card">
@@ -258,6 +300,42 @@
       <pre id="sdState" style="background:#fafafa;border:1px solid #eee;border-radius:6px;padding:10px;font-size:12px;white-space:pre-wrap;max-height:240px;overflow:auto">等待读取…</pre>
       <h4 style="margin:14px 0 6px">最近游戏记忆</h4>
       <div id="sdMemories" class="hint" style="line-height:1.7">尚未读取。</div>
+    </div>
+  </div>
+
+  <!-- ===== MCP 管理（可插拔插件 · 后台启停） ===== -->
+  <div class="panel" id="panel-mcp">
+    <div class="card">
+      <h3>📦 MCP 服务管理</h3>
+      <p class="hint" style="margin-bottom:12px">每个 MCP（含星露谷）以可插拔插件格式声明在 <code>config/mcp.json</code>。可在此<b>后台启停</b>（无需重启后端）：停止会注销其工具并让新会话不再看到它们；启动会注册工具并重建 Agent（下次会话生效）。</p>
+      <div style="margin-bottom:12px"><button class="btn btn-blue" onclick="loadMcp()">🔄 刷新</button></div>
+      <table id="mcpTable">
+        <thead><tr>
+          <th>服务</th><th>命令</th><th>启用</th><th>运行</th><th>工具</th><th>状态 / 错误</th><th>操作</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+      <div id="mcpDetail" class="hint" style="margin-top:14px"></div>
+    </div>
+
+    <div class="card">
+      <h3>🌾 星露谷扩展 · 自主游玩心跳</h3>
+      <p class="hint" style="margin-bottom:12px">让 AI 伙伴在游戏里自主动作，像真联机的同伴：<b>有指令听指令、没指令自己判断</b>。你在对话里说「跟我一起种地 / 去浇水 / 来农场挖矿」等带行动意图的话，会立即喂给心跳（LLM 决策版开启时）翻译成真正的移动/用工具动作，不用再等 30 秒。需先「启动」上方 stardew MCP 服务。</p>
+      <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:10px">
+        <div>
+          <span style="font-size:13px">状态：</span>
+          <span id="hbStatus" style="font-weight:600; color:#999">未知</span>
+        </div>
+        <button class="btn btn-green" onclick="hbStart()">▶ 启动心跳</button>
+        <button class="btn btn-red" onclick="hbStop()">⏹ 停止心跳</button>
+        <button class="btn btn-gray" onclick="hbStatusRefresh()">🔄 刷新</button>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px">
+          <input type="checkbox" id="hbLlmToggle" onchange="hbToggleLlm(this.checked)" style="width:auto">
+          LLM 决策版（规则兜底）
+        </label>
+      </div>
+      <div class="hint" id="hbDetail"></div>
+      <pre id="hbLog" style="margin-top:10px; background:#fafafa;border:1px solid #eee;border-radius:6px;padding:10px;font-size:12px;white-space:pre-wrap;max-height:160px;overflow:auto">—</pre>
     </div>
   </div>
   </div><!-- /content -->
@@ -295,6 +373,8 @@ document.querySelectorAll('.snav-item').forEach(tab=>{
     if(p==='render') loadRenderRoles();
     if(p==='model') loadModelRows();
     if(p==='stardew') loadStardew();
+    if(p==='mcp') loadMcp();
+    if(p==='tts') loadTts();
   };
 });
 
@@ -706,6 +786,63 @@ async function saveLLM(){
   loadLLM();
 }
 
+// ===== TTS 语音合成管理 =====
+function ttsSetFields(d){
+  const c=d.config||{};
+  $('ttsEnabledToggle').checked=!!d.enabled;
+  $('ttsEnabledLabel').textContent='TTS：'+(d.enabled?'开':'关');
+  $('ttsHost').value=c.TTS_HOST||'127.0.0.1';
+  $('ttsPort').value=c.TTS_PORT||'9880';
+  $('ttsTextLang').value=c.TTS_TEXT_LANG||'zh';
+  $('ttsPromptLang').value=c.TTS_PROMPT_LANG||'zh';
+  $('ttsMediaType').value=c.TTS_MEDIA_TYPE||'wav';
+  $('ttsSpeed').value=c.TTS_SPEED_FACTOR!=null?c.TTS_SPEED_FACTOR:1.0;
+  $('ttsRefAudio').value=c.TTS_REF_AUDIO_PATH||'';
+  $('ttsPromptText').value=c.TTS_PROMPT_TEXT||'';
+  $('ttsStatus').textContent='';
+}
+async function loadTts(){
+  try{
+    const res=await fetch('/admin/tts/status'); const json=await res.json();
+    if((json.code||0)!==0){ $('ttsStatus').textContent='❌ '+(json.message||'读取失败'); $('ttsStatus').style.color='#ff4d4f'; return; }
+    ttsSetFields(json.data||{});
+  }catch(e){ $('ttsStatus').textContent='❌ 读取失败: '+e; $('ttsStatus').style.color='#ff4d4f'; }
+}
+function ttsEnabledValue(){ return $('ttsEnabledToggle').checked; }
+async function ttsToggle(enabled){
+  const res=await fetch('/admin/tts/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({TTS_ENABLED:enabled})});
+  const j=await res.json();
+  toast((j.code===0?'✅ ':'❌ ')+(j.message||''));
+  loadTts();
+}
+function ttsPayload(){
+  return {
+    TTS_ENABLED: ttsEnabledValue(),
+    TTS_HOST: $('ttsHost').value.trim(),
+    TTS_PORT: $('ttsPort').value.trim(),
+    TTS_TEXT_LANG: $('ttsTextLang').value.trim(),
+    TTS_PROMPT_LANG: $('ttsPromptLang').value.trim(),
+    TTS_MEDIA_TYPE: $('ttsMediaType').value,
+    TTS_SPEED_FACTOR: $('ttsSpeed').value,
+    TTS_REF_AUDIO_PATH: $('ttsRefAudio').value.trim(),
+    TTS_PROMPT_TEXT: $('ttsPromptText').value.trim(),
+  };
+}
+async function saveTts(){
+  const res=await fetch('/admin/tts/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ttsPayload())});
+  const j=await res.json();
+  toast((j.code===0?'✅ ':'❌ ')+(j.message||''));
+  loadTts();
+}
+async function ttsTest(){
+  const st=$('ttsStatus'); st.textContent='测试中…'; st.style.color='#666';
+  await saveTts();
+  const res=await fetch('/admin/tts/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'你好呀，我是你的语音助手。'})});
+  const j=await res.json();
+  st.textContent=(j.code===0?'✅ ':'❌ ')+(j.message||'');
+  st.style.color=j.code===0?'#07c160':'#ff4d4f';
+}
+
 // ===== 星露谷 =====
 async function loadStardew(){
   try{
@@ -752,6 +889,122 @@ async function refreshStardew(){
     const res=await fetch('/admin/stardew/refresh',{method:'POST'}); const json=await res.json();
     toast(json.message||'已刷新'); loadStardew();
   }catch(e){ box.textContent='❌ '+e; box.style.color='#ff4d4f'; }
+}
+
+// ===== MCP 管理 =====
+async function loadMcp(){
+  const tbody=document.querySelector('#mcpTable tbody'); tbody.innerHTML='<tr><td colspan="7" class="hint">加载中…</td></tr>';
+  try{
+    const res=await fetch('/admin/mcp/status'); const json=await res.json();
+    const items=(json.data||[])||(json.data&&json.data.items)||[];
+    $('mcpDetail').innerHTML='';
+    if((json.code||0)!==0){ tbody.innerHTML=`<tr><td colspan="7" class="hint">${esc(json.message||'读取失败')}</td></tr>`; return; }
+    if(!items.length){ tbody.innerHTML='<tr><td colspan="7" class="hint">未配置任何 MCP 服务（config/mcp.json 的 servers 为空）。</td></tr>'; return; }
+    tbody.innerHTML='';
+    items.forEach(s=>{
+      const running=!!s.running;
+      const enabled=!!s.enabled;
+      const tools=s.tools_count!=null?s.tools_count:0;
+      const err=s.last_error||'';
+      const tr=document.createElement('tr');
+      const name=esc(s.name||'?');
+      tr.innerHTML=`
+        <td style="font-weight:600">${name}${s.registered?' <span title="工具已注册到对话" style="color:#07c160">✓</span>':''}</td>
+        <td style="max-width:240px">${esc(s.command||'')}</td>
+        <td>
+          <label style="cursor:pointer">
+            <input type="checkbox" ${enabled?'checked':''} onchange="mcpSetEnabled('${name}', this.checked)" style="width:auto">
+            <span style="font-size:12px;color:${enabled?'#07c160':'#999'}">${enabled?'启用':'停用'}</span>
+          </label>
+        </td>
+        <td>${running?'<span style="color:#07c160;font-weight:600">● 运行中</span>':'<span style="color:#999">○ 已停止</span>'}</td>
+        <td>${tools}</td>
+        <td style="max-width:260px">${err?`<span style="color:#e6a23c;font-size:12px">${esc(err).slice(0,80)}</span>`:'<span class="hint">正常</span>'}</td>
+        <td style="white-space:nowrap">
+          ${running
+            ? `<button class="btn btn-red" onclick="mcpStop('${name}')">停止</button>`
+            : `<button class="btn btn-green" onclick="mcpStart('${name}')">启动</button>`}
+          <button class="btn btn-gray" onclick="mcpRestart('${name}')" title="重启">重启</button>
+          <button class="btn btn-blue" onclick="mcpTest('${name}')" title="测试链路">测试</button>
+        </td>`;
+      tbody.appendChild(tr);
+    });
+    $('mcpDetail').textContent='共 '+items.length+' 个 MCP 服务。点击「🔄 刷新」查看最新状态。';
+    hbStatusRefresh();
+  }catch(e){
+    tbody.innerHTML=`<tr><td colspan="7" class="hint">读取失败: ${esc(e)}（后端可能未包含最新 MCP 管理接口，请重启后端）</td></tr>`;
+  }
+}
+async function mcpStart(name){
+  const res=await fetch(`/admin/mcp/${encodeURIComponent(name)}/start`,{method:'POST'});
+  const j=await res.json();
+  toast((j.code===0?'✅ ':'❌ ')+(j.message||''));
+  loadMcp();
+}
+async function mcpStop(name){
+  const res=await fetch(`/admin/mcp/${encodeURIComponent(name)}/stop`,{method:'POST'});
+  const j=await res.json();
+  toast((j.code===0?'✅ ':'❌ ')+(j.message||''));
+  loadMcp();
+}
+async function mcpRestart(name){
+  const res=await fetch(`/admin/mcp/${encodeURIComponent(name)}/restart`,{method:'POST'});
+  const j=await res.json();
+  toast((j.code===0?'✅ ':'❌ ')+(j.message||''));
+  loadMcp();
+}
+async function mcpTest(name){
+  const res=await fetch(`/admin/mcp/${encodeURIComponent(name)}/test`,{method:'POST'});
+  const j=await res.json();
+  const d=j.data||{};
+  let msg=j.message||'';
+  if(j.code===0&&d.tools_count!=null) msg=`测试成功 · 工具 ${d.tools_count} 个`+(d.tool_names&&d.tool_names.length?('：'+d.tool_names.slice(0,8).join('、')+(d.tool_names.length>8?'…':'')):'');
+  toast((j.code===0?'✅ ':'❌ ')+msg);
+}
+async function mcpSetEnabled(name, enabled){
+  const res=await fetch(`/admin/mcp/${encodeURIComponent(name)}/enabled`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
+  const j=await res.json();
+  toast((j.code===0?'✅ 已保存开关':'❌ '+(j.message||'保存失败'))+(enabled?'（启用，可在上方点击「启动」）':''));
+  loadMcp();
+}
+
+// ===== 星露谷自主游玩心跳（MCP 扩展） =====
+async function hbStatusRefresh(){
+  try{
+    const res=await fetch('/admin/mcp/stardew-autonomy/status'); const j=await res.json();
+    const d=j.data||{};
+    const st=$('hbStatus');
+    if(!d.available){ st.textContent='不可用'; st.style.color='#999'; $('hbDetail').textContent='（星露谷心跳插件未加载）'; return; }
+    const run=d.running;
+    st.textContent=run?'● 运行中':'○ 已停止';
+    st.style.color=run?'#07c160':'#999';
+    const llmToggle=$('hbLlmToggle');
+    if(llmToggle){ llmToggle.checked=!!d.llm_enabled; llmToggle.disabled=!d.llm_available; }
+    let detail=`间隔 ${d.interval||30}s · tick ${d.tick||0} · 进场 ${d.enter||0} · 动作 ${d.act||0} · 跳过 ${d.skip||0}`;
+    if(d.llm_enabled) detail+=` · LLM决策 ${d.llm_act||0} / 规则 ${d.rule_act||0} / 回退 ${d.llm_fallback||0}`;
+    if(!d.llm_available) detail+=' · （LLM 决策不可用：无适配器）';
+    if(d.pending_command) detail+=` · 待执行指令: "${d.pending_command}"`;
+    if(d.last_error) detail+=' · 错误:'+d.last_error;
+    $('hbDetail').textContent=detail;
+  }catch(e){ $('hbDetail').textContent='读取失败: '+e; }
+}
+async function hbStart(){
+  const res=await fetch('/admin/mcp/stardew-autonomy/start',{method:'POST'});
+  const j=await res.json();
+  toast((j.code===0?'✅ ':'❌ ')+(j.message||''));
+  hbStatusRefresh();
+}
+async function hbStop(){
+  const res=await fetch('/admin/mcp/stardew-autonomy/stop',{method:'POST'});
+  const j=await res.json();
+  toast((j.code===0?'✅ ':'❌ ')+(j.message||''));
+  hbStatusRefresh();
+}
+async function hbToggleLlm(enabled){
+  const res=await fetch('/admin/mcp/stardew-autonomy/llm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
+  const j=await res.json();
+  toast((j.code===0?'✅ ':'❌ ')+(j.message||''));
+  hbStatusRefresh();
 }
 
 // ===== 初始化 =====

@@ -65,7 +65,8 @@ class VisionService:
         if self._client is None:
             if OllamaClient is None:
                 return None
-            self._client = OllamaClient(host=self.host) if self.host else ollama
+            # 超时通过客户端构造传入（ollama SDK 的 chat() 本身不接受 timeout 参数）
+            self._client = OllamaClient(host=self.host, timeout=VISION_TIMEOUT) if self.host else ollama.Client(timeout=VISION_TIMEOUT)
         return self._client
 
     def _enabled_for(self, feature: str) -> bool:
@@ -154,10 +155,11 @@ class VisionService:
             return ""
         try:
             prompt = "请用中文简要描述这张图片里的主体、内容与场景（两三句话即可）。如果看不清就说看不清。"
+            # 注意：新版 ollama python SDK 的 chat() 不接受顶层 images 参数，
+            # 图片必须作为 message 的 images 字段传入（messages[].images）。
             resp = client.chat(
                 model=self.model or VISION_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                images=images,
+                messages=[{"role": "user", "content": prompt, "images": images}],
                 stream=False,
                 options={"temperature": 0.2},
             )

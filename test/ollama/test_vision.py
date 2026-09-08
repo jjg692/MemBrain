@@ -65,7 +65,9 @@ def test_describe_image_success_mock(monkeypatch):
     _reset_cache_and_svc()
     class FakeClient:
         def chat(self, **kw):
-            assert kw["images"]  # 图片确实传入
+            # 图片通过 message 的 images 字段传入（新版 ollama SDK 规范）
+            msgs = kw.get("messages") or []
+            assert msgs and msgs[0].get("images")
             return {"message": {"content": "一只猫在窗台上晒太阳"}}
     svc = V.VisionService(model="vl-model", enabled=True)
     svc._ensure_client = lambda: FakeClient()
