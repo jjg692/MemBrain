@@ -266,6 +266,17 @@
       </div>
       <p class="hint" style="margin-top:12px">启动 GPT-SoVITS 服务方式：<code>python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml</code>。「测试服务」会先探测端口连通性，再真实合成一小段验证参照音频配置。</p>
     </div>
+
+    <!-- ===== 每角色 TTS 独立服务 ===== -->
+    <div class="card" style="margin-top:18px">
+      <h3>🎙️ 每角色 TTS 独立服务（GPT-SoVITS）</h3>
+      <p class="hint" style="margin-bottom:12px">每个角色独立启动一个 GPT-SoVITS 服务（独立端口 + 独立权重/语言/参照音频）。配置「tts 模型执行文件」「权重文件」「参数/参照音频」后用「启动」按钮拉起；合成时按角色自动选用对应服务。</p>
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px">
+        <button class="btn btn-blue" onclick="loadTtsRoles()">🔄 刷新角色列表</button>
+        <span class="hint" id="ttsRolesStatus"></span>
+      </div>
+      <div id="ttsRolesList" style="display:flex; flex-direction:column; gap:12px"></div>
+    </div>
   </div>
 
   <!-- ===== 配置 ===== -->
@@ -356,6 +367,21 @@
   </div>
 </div>
 
+<!-- 通用文件浏览器 Modal（TTS 每角色选文件用） -->
+<div class="modal-mask" id="fileBrowseModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="fileBrowseTitle">选择文件</h3>
+      <button class="modal-close" onclick="closeFileBrowseModal()">×</button>
+    </div>
+    <div class="modal-body" id="fileBrowseBody"></div>
+    <div class="modal-foot">
+      <button class="btn btn-gray" onclick="closeFileBrowseModal()">取消</button>
+      <button class="btn btn-green" onclick="confirmFileBrowsePick()">选用此路径</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2000); }
@@ -374,7 +400,7 @@ document.querySelectorAll('.snav-item').forEach(tab=>{
     if(p==='model') loadModelRows();
     if(p==='stardew') loadStardew();
     if(p==='mcp') loadMcp();
-    if(p==='tts') loadTts();
+    if(p==='tts'){ loadTts(); loadTtsRoles(); }
   };
 });
 
@@ -843,7 +869,209 @@ async function ttsTest(){
   st.style.color=j.code===0?'#07c160':'#ff4d4f';
 }
 
-// ===== 星露谷 =====
+// ===== 每角色 TTS 独立服务管理 =====
+let ttsCustomEdits = {};   // role_id -> 前端已编辑但未保存的中间值
+let ttsSelected = null;    // 当前展开编辑的角色
+async function loadTtsRoles(){
+  const st=$('ttsRolesStatus'); st.textContent='加载中…'; st.style.color='#666';
+  // 角色主列表（用于列出可配置的角色）
+  let roles=[]
+  try{ const r=await (await fetch('/admin/roles')).json(); roles=(r.data||[]); }catch(e){}
+  // 已配置 TTS 的角色状态
+  let cfgList=[]
+  try{ const r=await (await fetch('/admin/tts/roles')).json(); cfgList=(r.data||[]); }catch(e){}
+  const box=$('ttsRolesList'); box.innerHTML='';
+  const cfgMap={}; cfgList.forEach(c=>cfgMap[c.role_id]=c);
+  const allIds={}; roles.forEach(r=>allIds[r.role_id]=r.display_name);
+  cfgList.forEach(c=>{ if(!allIds[c.role_id]) allIds[c.role_id]=c.role_id; });
+
+  Object.keys(allIds).forEach(rid=>{
+    const info=cfgMap[rid]||{};
+    const card=document.createElement('div');
+    card.className='card'; card.style.padding='12px'; card.style.margin='0';
+    card.id='ttsRoleCard_'+rid;
+    card.innerHTML=`
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <strong style="min-width:90px">${esc(allIds[rid])} <span style="color:#999;font-weight:400">(${esc(rid)})</span></strong>
+        <span id="ttsRoleState_${rid}" style="font-size:13px">${info.running?'<span style="color:#07c160">● 运行中</span>':'<span style="color:#999">○ 未运行</span>'}</span>
+        <span style="font-size:13px;color:#888">端口 ${info.port!==undefined?info.port:'—'} · 语言 ${info.lang||'—'}</span>
+        <span style="flex:1"></span>
+        <button class="btn ${info.running?'btn-red':'btn-green'}" onclick="ttsRoleStartStop('${rid}', ${!info.running})">${info.running?'⏹ 停止':'▶ 启动'}</button>
+        <button class="btn btn-blue" onclick="toggleTtsRoleEdit('${rid}')">⚙️ 配置</button>
+        ${info.configured?`<button class="btn btn-gray" onclick="deleteTtsRole('${rid}')">🗑 删除</button>`:''}
+      </div>
+      <div id="ttsRoleEdit_${rid}" style="display:none;margin-top:10px;border-top:1px solid #eee;padding-top:10px"></div>`;
+    box.appendChild(card);
+    // 若之前选中展开，自动加载编辑区
+    if(ttsSelected===rid) toggleTtsRoleEdit(rid, true);
+  });
+  st.textContent=Object.keys(allIds).length?`共 ${Object.keys(allIds).length} 个角色`:'';
+  st.style.color='#999';
+}
+function toggleTtsRoleEdit(rid, forceOpen){
+  const willOpen=forceOpen!==undefined?forceOpen:(ttsSelected!==rid);
+  ttsSelected=willOpen?rid:null;
+  const box=$('ttsRoleEdit_'+rid); if(!box) return;
+  if(!willOpen){ box.style.display='none'; return; }
+  loadTtsRoleEdit(rid, box);
+}
+async function loadTtsRoleEdit(rid, box){
+  box.innerHTML='<span class="hint">加载中…</span>'; box.style.display='block';
+  let cfg={};
+  try{ const r=await (await fetch('/admin/tts/roles/'+encodeURIComponent(rid))).json(); cfg=r.data||{}; }catch(e){cfg={};}
+  ttsCustomEdits[rid]=cfg;
+  renderTtsRoleEdit(rid, box);
+}
+function renderTtsRoleEdit(rid, box){
+  const c=ttsCustomEdits[rid]||{};
+  const w=c.weights||{};
+  box.innerHTML=`
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 18px">
+      <div><label>tts 模型执行文件（python 解释器）</label>
+        <div style="display:flex;gap:6px"><input id="tr_exec_${rid}" value="${esc(c.exec_file||'')}" placeholder="…\\runtime\\python.exe"><button class="btn btn-gray" onclick="ttsBrowse('${rid}','exec_file')">浏览…</button></div></div>
+      <div><label>api_v2.py 位置</label>
+        <div style="display:flex;gap:6px"><input id="tr_api_${rid}" value="${esc(c.api_file||'')}" placeholder="…\\api_v2.py"><button class="btn btn-gray" onclick="ttsBrowse('${rid}','api_file')">浏览…</button></div></div>
+      <div><label>GPT-SoVITS 根目录</label>
+        <div style="display:flex;gap:6px"><input id="tr_root_${rid}" value="${esc(c.sovits_root||'')}" placeholder="D:\\Program\\GPT-SoVITS…"><button class="btn btn-gray" onclick="ttsBrowse('${rid}','sovits_root')">浏览…</button></div></div>
+      <div><label>服务端口</label><input id="tr_port_${rid}" type="number" value="${c.port!=null?c.port:''}" placeholder="9880"></div>
+      <div><label>启动语言</label><select id="tr_lang_${rid}"><option value="zh" ${c.lang==='zh'?'selected':''}>中文 (zh)</option><option value="ja" ${c.lang==='ja'?'selected':''}>日文 (ja)</option><option value="en" ${c.lang==='en'?'selected':''}>英文 (en)</option></select></div>
+      <div><label>启用该角色 TTS</label><label style="display:flex;align-items:center;gap:6px;margin-top:4px"><input type="checkbox" id="tr_enabled_${rid}" ${c.enabled?'checked':''} style="width:auto"> 启用</label></div>
+      <div><label>权重文件 vits (.pth)</label>
+        <div style="display:flex;gap:6px"><input id="tr_pth_${rid}" value="${esc(w.pth||'')}" placeholder="…\\xxx.pth"><button class="btn btn-gray" onclick="ttsBrowse('${rid}','weights.pth')">浏览…</button></div></div>
+      <div><label>权重文件 t2s (.ckpt)</label>
+        <div style="display:flex;gap:6px"><input id="tr_ckpt_${rid}" value="${esc(w.ckpt||'')}" placeholder="…\\xxx.ckpt"><button class="btn btn-gray" onclick="ttsBrowse('${rid}','weights.ckpt')">浏览…</button></div></div>
+      <div style="grid-column:1/-1"><label>参照音频（该角色音色参考）</label>
+        <div style="display:flex;gap:6px"><input id="tr_ref_${rid}" value="${esc(c.ref_audio_path||'')}" placeholder="…\\角色目录\\xxx.mp3"><button class="btn btn-gray" onclick="ttsBrowse('${rid}','ref_audio_path')">浏览…</button></div></div>
+      <div style="grid-column:1/-1"><label>参照音频转写文本 (prompt_text)</label><input id="tr_prompt_${rid}" value="${esc(c.prompt_text||'')}" placeholder="参照音频里说的那句话"></div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:12px">
+      <button class="btn btn-green" onclick="saveTtsRole('${rid}')">💾 保存角色配置</button>
+      <button class="btn btn-blue" onclick="testTtsRole('${rid}')">🧪 测试合成</button>
+      <span class="hint" id="tr_msg_${rid}" style="align-self:center"></span>
+    </div>`;
+  // 收回编辑区状态
+  setTimeout(()=>{ ttsSelected=rid; },0);
+}
+function ttsRoleField(rid, field){
+  const id='tr_'+field.replace(/[.]/g,'_')+'_'+rid;
+  return $(id) ? $(id).value : '';
+}
+function collectTtsRole(rid){
+  const w={pth:ttsRoleField(rid,'pth'), ckpt:ttsRoleField(rid,'ckpt')};
+  const c=ttsCustomEdits[rid]||{};
+  return {
+    exec_file:ttsRoleField(rid,'exec_file'),
+    api_file:ttsRoleField(rid,'api_file'),
+    sovits_root:ttsRoleField(rid,'root'),
+    port: ttsRoleField(rid,'port')?Number(ttsRoleField(rid,'port')):c.port,
+    lang: ttsRoleField(rid,'lang')||'zh',
+    enabled: !!($('tr_enabled_'+rid)&&$('tr_enabled_'+rid).checked),
+    ref_audio_path: ttsRoleField(rid,'ref'),
+    prompt_text: ttsRoleField(rid,'prompt'),
+    weights: (w.pth||w.ckpt)?w:undefined,
+  };
+}
+async function saveTtsRole(rid){
+  const msg=$('tr_msg_'+rid); if(!msg) return;
+  msg.textContent='保存中…'; msg.style.color='#666';
+  const payload=collectTtsRole(rid);
+  const res=await fetch('/admin/tts/roles/'+encodeURIComponent(rid)+'/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const j=await res.json();
+  msg.textContent=(j.code===0?'✅ ':'❌ ')+(j.message||''); msg.style.color=j.code===0?'#07c160':'#ff4d4f';
+  loadTtsRoles();
+}
+async function ttsRoleStartStop(rid, start){
+  const res=await fetch('/admin/tts/roles/'+encodeURIComponent(rid)+'/'+(start?'start':'stop'),{method:'POST'});
+  const j=await res.json();
+  toast((j.code===0?'✅ ':'❌ ')+(j.message||''));
+  loadTtsRoles();
+}
+async function deleteTtsRole(rid){
+  if(!confirm('确定删除角色「'+rid+'」的 TTS 配置？')) return;
+  const res=await fetch('/admin/tts/roles/'+encodeURIComponent(rid)+'/delete',{method:'POST'});
+  const j=await res.json();
+  toast((j.code===0?'✅ ':'❌ ')+(j.message||'')); loadTtsRoles();
+}
+async function testTtsRole(rid){
+  const msg=$('tr_msg_'+rid); if(!msg) return;
+  await saveTtsRole(rid);
+  const res=await fetch('/admin/tts/roles/'+encodeURIComponent(rid)+'/start',{method:'POST'});
+  const j=await res.json();
+  msg.textContent=(j.code===0?'✅ 已尝试启动':'❌ '+(j.message||'')); msg.style.color=j.code===0?'#07c160':'#ff4d4f';
+  toast((j.code===0?'✅ 角色 TTS 服务已启动（若未就绪请稍候刷新）':'❌ '+(j.message||'')));
+  setTimeout(loadTtsRoles, 1500);
+}
+
+// ===== 通用文件浏览器 Modal（TTS 选文件） =====
+let fbTarget=''; let fbField=''; let fbPath=''; let fbFilterFile=false;
+async function ttsBrowse(rid, field){
+  fbTarget=rid; fbField=field; fbFilterFile=field.indexOf('sovits_root')>=0?false:true;
+  await fileBrowseOpen('');
+}
+async function fileBrowseOpen(path){
+  const body=$('fileBrowseBody'); body.innerHTML='<span class="hint">加载中…</span>';
+  $('fileBrowseTitle').textContent='选择文件';
+  $('fileBrowseModal').classList.add('show');
+  const url='/admin/tts/browse'+(path?'?path='+encodeURIComponent(path):'');
+  try{
+    const r=await (await fetch(url)).json();
+    if((r.code||0)!==0){ body.innerHTML='<p class="hint">'+esc(r.message||'读取失败')+'</p>'; return; }
+    const d=r.data||{};
+    body.innerHTML='';
+    if(d.cwd && d.drives){
+      // 盘符视图（含默认 GPT-SoVITS 根快捷入口）
+      body.innerHTML+='<button class="btn btn-gray" style="margin:2px" onclick="fileBrowseQuick(\''+escAttr(d.cwd)+'\')">📁 GPT-SoVITS 根：'+esc(d.cwd)+'</button><br><br>';
+      d.drives.forEach(drv=>{
+        const b=document.createElement('button'); b.className='btn btn-gray'; b.style.margin='2px';
+        b.textContent='💾 '+drv; b.onclick=()=>fileBrowseOpen(drv);
+        body.appendChild(b);
+      });
+      return;
+    }
+    // 目录内视图
+    body.innerHTML+=`<div style="margin-bottom:8px;word-break:break-all">📍 ${esc(d.path||'')}</div>`;
+    if(d.parent){ body.innerHTML+=`<div><button class="btn btn-gray" style="margin:2px" onclick="fileBrowseOpen('${escAttr(d.parent)}')">⬆ 上一级</button></div>`; }
+    (d.dirs||[]).forEach(dir=>{
+      const b=document.createElement('button'); b.className='btn btn-gray'; b.style.margin='2px'; b.style.display='block';
+      b.textContent='📁 '+dir; b.style.textAlign='left'; b.style.width='100%';
+      b.onclick=()=>{ fbPath=d.path+sepStr(d.sep)+dir; fileBrowseOpen(fbPath); };
+      body.appendChild(b);
+    });
+    if(fbFilterFile){
+      body.innerHTML+='<div style="margin:8px 0;border-top:1px solid #eee;padding-top:6px;font-weight:600">文件</div>';
+      (d.files||[]).forEach(file=>{
+        const row=document.createElement('div');
+        row.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:3px 4px;cursor:pointer;border-radius:4px';
+        row.onmouseover=()=>{row.style.background='#f5f5f5';}; row.onmouseout=()=>{row.style.background='';};
+        row.onclick=()=>{ fbPath=d.path+sepStr(d.sep)+file; pickFbClass(); };
+        row.innerHTML=`<span style="word-break:break-all">📄 ${esc(file)}</span><button class="btn btn-blue" style="padding:2px 10px">选用</button>`;
+        body.appendChild(row);
+      });
+    }
+  }catch(e){ body.innerHTML='<p class="hint">载入失败: '+esc(String(e))+'</p>'; }
+}
+function sepStr(sep){ return sep==='/'?'/':'\\'; }
+function escAttr(s){ return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+function pickFbClass(){ fileBrowsePick(fbPath); }
+function fileBrowseQuick(p){ fbPath=''; fileBrowseOpen(p); }
+function closeFileBrowseModal(){ $('fileBrowseModal').classList.remove('show'); }
+function confirmFileBrowsePick(){
+  if(!fbTarget){ closeFileBrowseModal(); return; }
+  if(!fbPath){ toast('请先选择一个文件'); return; }
+  fileBrowsePick(fbPath);
+}
+function fileBrowsePick(fullPath){
+  const rid=fbTarget, field=fbField;
+  // 更新 ttsCustomEdits 中间值
+  const c=ttsCustomEdits[rid]=ttsCustomEdits[rid]||{};
+  if(field==='weights.pth'){ c.weights=c.weights||{}; c.weights.pth=fullPath; }
+  else if(field==='weights.ckpt'){ c.weights=c.weights||{}; c.weights.ckpt=fullPath; }
+  else c[field]=fullPath;
+  const editBox=$('ttsRoleEdit_'+rid); if(editBox) renderTtsRoleEdit(rid, editBox);
+  closeFileBrowseModal();
+  toast('已选择路径');
+}
+
 async function loadStardew(){
   try{
     const res=await fetch('/admin/stardew/status'); const json=await res.json();

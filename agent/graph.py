@@ -780,10 +780,10 @@ class LangGraphMemoryAgent:
             self.memory.save_short_term(user_id, self.role_id, user_msg, reply)
             self.memory.judge_and_extract_facts(user_id, self.role_id, user_msg, reply)
             # TTS：把 LLM 回复"说出来"（GPT-SoVITS）。默认关闭（TTS_ENABLED=false），
-            # 失败/未启动全部静默，绝不影响回复生成与推送。
+            # 支持每角色独立 TTS 服务（见 core/tts_roles）。失败/未启动全部静默。
             try:
                 from core.tts_client import speak_reply
-                speak_reply(reply)
+                speak_reply(reply, role_id=self.role_id)
             except Exception:
                 pass
             # 关系记忆内核：沉淀共同经历 + 周期反思（底层内在状态层，异步不阻塞回复）

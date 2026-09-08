@@ -356,6 +356,116 @@ def setup_admin(app):
             log_error("admin.tts.test", e)
             return {"code": -1, "message": f"测试失败: {e}"}
 
+    # ===================== 每角色 TTS 独立服务管理 =====================
+
+    @router.get("/tts/roles")
+    async def tts_roles_list():
+        """返回所有已配置角色的 TTS 状态列表。"""
+        try:
+            from core.tts_roles import list_roles_status
+            return {"code": 0, "data": list_roles_status()}
+        except Exception as e:
+            log_error("admin.tts.roles", e)
+            return {"code": -1, "message": f"读取每角色 TTS 列表失败: {e}"}
+
+    @router.get("/tts/roles/{role_id}")
+    async def tts_role_get(role_id: str):
+        """返回某个角色的完整 TTS 配置（含 exec/api/权重/语言/参照音频/端口）。"""
+        try:
+            from core.tts_roles import get_role_config, role_summary, role_configured
+            cfg = get_role_config(role_id)
+            cfg.update(role_summary(role_id))
+            cfg["configured"] = role_configured(role_id)
+            return {"code": 0, "data": cfg}
+        except Exception as e:
+            log_error("admin.tts.role_get", e)
+            return {"code": -1, "message": f"读取角色 TTS 配置失败: {e}"}
+
+    @router.post("/tts/roles/{role_id}/save")
+    async def tts_role_save(role_id: str, request: Request):
+        """保存某角色的 TTS 配置。可部分字段更新。"""
+        try:
+            body = await request.json()
+            from core.tts_roles import save_role_config
+            cfg = save_role_config(role_id, body or {})
+            cfg["configured"] = True
+            return {"code": 0, "data": cfg, "message": f"角色「{role_id}」TTS 配置已保存"}
+        except Exception as e:
+            log_error("admin.tts.role_save", e)
+            return {"code": -1, "message": f"保存角色 TTS 配置失败: {e}"}
+
+    @router.post("/tts/roles/{role_id}/delete")
+    async def tts_role_delete(role_id: str):
+        try:
+            from core.tts_roles import delete_role_config, stop_role_tts
+            stop_role_tts(role_id)
+            delete_role_config(role_id)
+            return {"code": 0, "message": f"角色「{role_id}」TTS 配置已删除"}
+        except Exception as e:
+            log_error("admin.tts.role_delete", e)
+            return {"code": -1, "message": f"删除失败: {e}"}
+
+    @router.post("/tts/roles/{role_id}/start")
+    async def tts_role_start(role_id: str):
+        """启动该角色的 GPT-SoVITS 服务（后台子进程）。"""
+        try:
+            from core.tts_roles import start_role_tts
+            res = start_role_tts(role_id)
+            res.update({"code": 0 if res.get("ok") else -1})
+            return res
+        except Exception as e:
+            log_error("admin.tts.role_start", e)
+            return {"code": -1, "message": f"启动失败: {e}"}
+
+    @router.post("/tts/roles/{role_id}/stop")
+    async def tts_role_stop(role_id: str):
+        try:
+            from core.tts_roles import stop_role_tts
+            res = stop_role_tts(role_id)
+            res.update({"code": 0 if res.get("ok") else -1})
+            return res
+        except Exception as e:
+            log_error("admin.tts.role_stop", e)
+            return {"code": -1, "message": f"停止失败: {e}"}
+
+    @router.get("/tts/browse")
+    async def tts_browse(path: str = ""):
+        """目录浏览：列出指定目录下的子目录与文件（供前端"文件管理器选择"）。
+        path 为空时列出盘符（Windows）。"""
+        try:
+            from core.tts_roles import _DEFAULT_SOVITS_ROOT
+            import os as _os
+            if not path:
+                # Windows 盘符列表
+                drives = []
+                for d in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                    if _os.path.exists(f"{d}:\\"):
+                        drives.append(f"{d}:\\")
+                # 默认定位到 GPT-SoVITS 根，方便快速进入
+                return {"code": 0, "data": {"drives": drives,
+                                            "cwd": _DEFAULT_SOVITS_ROOT,
+                                            "sep": "\\"}}
+            p = Path(path)
+            if not p.exists() or not p.is_dir():
+                return {"code": -1, "message": f"目录不存在: {path}"}
+            dirs, files = [], []
+            for entry in sorted(p.iterdir(), key=lambda e: e.name.lower()):
+                try:
+                    if entry.is_dir():
+                        dirs.append(entry.name)
+                    else:
+                        files.append(entry.name)
+                except Exception:
+                    continue
+            return {"code": 0, "data": {
+                "path": str(p),
+                "parent": str(p.parent) if p.parent != p else "",
+                "dirs": dirs, "files": files, "sep": "\\",
+            }}
+        except Exception as e:
+            log_error("admin.tts.browse", e)
+            return {"code": -1, "message": f"浏览失败: {e}"}
+
     # ===================== 星露谷 MCP 管理 =====================
 
     @router.get("/stardew/status")

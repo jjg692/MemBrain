@@ -217,12 +217,26 @@ def status() -> dict:
     }
 
 
-def speak_reply(text: str, timeout: float = 3.0) -> bool:
+def speak_reply(text: str, timeout: float = 3.0, role_id: Optional[str] = None) -> bool:
     """在**后台线程**合成并播放一段回复语音；失败静默。
 
+    若传入 role_id 且该角色配置了**每角色独立 TTS**（enabled + 已启动 + 权重/参照音频齐全），
+    则优先用该角色服务；否则回退到全局单端口模式（由 TTS_ENABLED 控制）。
     供 LLM 回复 hook 调用 —— 不阻塞回复生成/推送，也不因 TTS 异常影响主流程。
     返回 True 表示已发起（不代表播放成功）。
     """
+    # 每角色独立 TTS 优先
+    if role_id:
+        try:
+            from core import tts_roles
+            cfg = tts_roles.get_role_config(role_id)
+            if cfg.get("enabled") and tts_roles.role_running(role_id):
+                logger.info("[tts] 每角色 TTS 生效（role=%s）", role_id)
+                tts_roles.speak_for_role(role_id, text, timeout=timeout)
+                return True
+        except Exception as exc:
+            logger.warning("[tts] 每角色 TTS 失败，回退全局: %s", exc)
+
     client = get_client()
     if client is None or not (text and text.strip()):
         return False

@@ -50,3 +50,8 @@ test/ollama/test_game_memory.py
 
 # ===================== 红警 MO 接入插件（redalertmo/） =====================
 redalertmo/
+
+# ===================== 每角色 TTS 配置（本地机器专属路径） =====================
+# 每角色 TTS 服务的权重/参照音频/执行文件路径是本机专属，不入库；生成的 yaml 同理
+config/tts_roles.json
+config/tts_roles_configs/
