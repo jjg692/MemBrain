@@ -32,7 +32,26 @@ import requests
 
 # 项目根目录
 ROOT = os.path.dirname(os.path.abspath(__file__))
-HOST_URL = "http://127.0.0.1:8000"
+
+# 后端地址：优先 .env 的 PORT/HOST（core.config 与 web_app.py 同源，避免硬编码端口漂移）。
+# 本地壳连接固定用 127.0.0.1（后端 HOST 可能是 0.0.0.0，此处用于本地回环可达），
+# 可被环境变量 MEMBRAIN_PORT 覆盖（便于测试/多实例）。
+def _backend_port() -> int:
+    try:
+        return int(os.getenv("MEMBRAIN_PORT", "") or 0) or _cfg_port()
+    except Exception:
+        return 8000
+
+def _cfg_port() -> int:
+    try:
+        from core.config import PORT
+        if not PORT:
+            return 8000
+        return int(PORT)
+    except Exception:
+        return 8000
+
+HOST_URL = f"http://127.0.0.1:{_backend_port()}"
 
 # 主窗口页面：默认 Live2D 立绘页；--chat / PET_PAGE=chat 切聊天页
 PET_PAGE = os.getenv("PET_PAGE", "live2d").strip().lower()
@@ -111,6 +130,49 @@ def stop_backend():
         except Exception:
             pass
     _backend_proc = None
+
+
+# 用户主动退出标志：置位后守护线程不再自动重启后端
+_backend_stop_requested = False
+
+
+def request_backend_stop():
+    """标记用户已主动退出（调用 stop_backend 之前置位），禁止守护线程重启"""
+    global _backend_stop_requested
+    _backend_stop_requested = True
+
+
+def guard_backend(window=None):
+    """守护线程：本壳启动的后端进程意外退出时，自动重启并刷新窗口。
+
+    仅当：
+      - 后端由本壳启动（_backend_proc 非空）
+      - 未收到用户主动退出请求（_backend_stop_requested 为 False）
+    满足则重启后端，等待就绪后重载窗口页面，保证"宠物不消失"。
+    """
+    while not _backend_stop_requested:
+        time.sleep(2.0)
+        try:
+            proc = _backend_proc
+            if proc is None or _backend_stop_requested:
+                continue
+            # 进程仍存活 -> 正常
+            if proc.poll() is None:
+                continue
+            # 进程已退出（意外退出）
+            log("检测到后端进程退出，自动重启...")
+            if start_backend():
+                log("后端自动重启成功")
+                if window is not None:
+                    try:
+                        window.load_url(LIVE2D_PAGE_URL if PET_PAGE == "live2d" else CHAT_PAGE_URL)
+                    except Exception:
+                        pass
+            else:
+                log("后端自动重启失败，稍后重试")
+                time.sleep(5)
+        except Exception:
+            pass
 
 
 # ===================== 日志 =====================
@@ -315,6 +377,7 @@ def main():
                     except Exception: pass
             except Exception:
                 pass
+            request_backend_stop()
             stop_backend()
             icon.stop()
 
@@ -358,6 +421,9 @@ def main():
 
     # 托盘放后台线程（与 GUI 主循环共存）
     threading.Thread(target=run_tray, daemon=True).start()
+
+    # 后端守护线程：意外退出自动重启（仅当由本壳启动且未请求停止）
+    threading.Thread(target=guard_backend, args=(window,), daemon=True).start()
 
     # 启动 GUI
     webview.start()
