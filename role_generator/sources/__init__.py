@@ -46,7 +46,7 @@ def fetch_character_sources(character: str, work: str = '', timeout: int = 20) -
 
 
 def to_merge_text(character: str, docs: List[Dict], max_chars_per_source: int = 3000) -> str:
-    """把多来源合并成一段供 LLM 蒸馏的文本（带站点等级标注）"""
+    """把多来源合并成一段供 LLM 蒸馏的文本（带站点等级标注 + infobox/分类）"""
     blocks = ['# 角色: ' + character + ' 资料汇总']
     for d in docs:
         site = d.get('site', '?')
@@ -56,7 +56,15 @@ def to_merge_text(character: str, docs: List[Dict], max_chars_per_source: int = 
         if status != 'ok' or not text:
             blocks.append('\n## 来源: ' + site + ' (rank=' + rank + ', status=' + status + ')\n无有效内容')
             continue
-        if len(text) > max_chars_per_source:
-            text = text[:max_chars_per_source]
-        blocks.append('\n## 来源: ' + site + ' (rank=' + rank + ', retrieved_at=' + str(d.get('retrieved_at', '')) + ')\n' + text)
+        parts = []
+        # 若抓到了结构化字段，先摆出来（更贴近"角色图谱"）
+        if d.get('infobox'):
+            parts.append('【信息栏】\n' + d['infobox'])
+        if d.get('categories'):
+            parts.append('【分类】' + '、'.join(d['categories'][:20]))
+        parts.append(text)
+        merged_src = '\n\n'.join(parts)
+        if len(merged_src) > max_chars_per_source:
+            merged_src = merged_src[:max_chars_per_source]
+        blocks.append('\n## 来源: ' + site + ' (rank=' + rank + ', retrieved_at=' + str(d.get('retrieved_at', '')) + ')\n' + merged_src)
     return '\n'.join(blocks)
