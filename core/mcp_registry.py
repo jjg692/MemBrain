@@ -9,7 +9,7 @@ MCP 服务注册中心（插件化 + 运行时启停）
     * 停止某服务 -> 移除对应 mcp_<server>_* 工具；
 - 启停后通过回调使 AgentFactory 失效（重建 Agent 以拾取新工具集）。
 
-这样 MCP（星露谷等）以可插拔插件格式存在，后台可随时启停，无需重启后端。
+这样 MCP 扩展以可插拔插件格式存在，后台可随时启停，无需重启后端。
 """
 
 import threading
@@ -33,8 +33,6 @@ class McpRegistry:
         self._lock = threading.RLock()
         # 记录当前已注册进 LLM 工具集的 server 名（与正在运行一致）
         self._registered: set = set()
-        # 星露谷自主游玩心跳（MCP 扩展，惰性构建）
-        self._heartbeat = None
 
     # ---------------- 工具集同步 ----------------
 
@@ -59,29 +57,10 @@ class McpRegistry:
                 return _call
 
             tools.TOOL_REGISTRY[tname] = _mk(tname, desc, self.manager)
-        # 若该 server 是星露谷桥接（带 stardew_spawn），注册一个高阶"加入游戏"便捷工具，
-        # 让 LLM 有单一直观入口（spawn + 设 player 模式），避免它自行错序调用原始工具。
-        has_stardew_spawn = any(k.endswith("stardew_spawn") for k in tools.TOOL_REGISTRY)
-        self._maybe_register_stardew_join(has_stardew_spawn)
         # ALL_TOOLS = 基础工具 + 当前 manager 内所有 MCP schema（单一事实源）
         self._sync_all_tools()
         with self._lock:
             self._registered.add(server_name)
-
-    def _maybe_register_stardew_join(self, has_stardew_spawn: bool):
-        """检测到星露谷桥接工具时，注册 stardew_join 高阶工具（幂等）。
-
-        星露谷特有逻辑已收敛到 stardew.boot（boot.register_join_tool），
-        这里只做委托，不内嵌星露谷实现。
-        """
-        if not has_stardew_spawn:
-            return
-        try:
-            from stardew.boot import register_join_tool
-            register_join_tool()
-        except Exception:
-            pass
-        # schema 由 _sync_all_tools 统一维护（调用方随后会调用它）
 
     def _unregister_tools(self, server_name: str):
         """把某个 server 的工具从 LLM 工具集移除。"""
@@ -94,46 +73,21 @@ class McpRegistry:
             self._registered.discard(server_name)
 
     def _sync_all_tools(self):
-        """重算 ALL_TOOLS：基础工具 + 当前 manager 内所有 MCP schema + 高阶便捷工具。"""
+        """重算 ALL_TOOLS：基础工具 + 当前 manager 内所有 MCP schema。"""
         from core import tools
         # 找 ALL_TOOLS 里非 mcp 的基础部分（search/control/assistant 等）
         base = [t for t in tools.ALL_TOOLS
-                if not (t.get("function", {}).get("name", "").startswith("mcp_"))
-                and t.get("function", {}).get("name") != "stardew_join"]
+                if not t.get("function", {}).get("name", "").startswith("mcp_")]
         mcp_schemas = self.manager.schemas()  # 当前 running servers 的 schema
-        extra = []
-        # 高阶星露谷便捷工具 schema（若注册过，保留在工具集里）
-        if "stardew_join" in tools.TOOL_REGISTRY:
-            extra.append({
-                "type": "function",
-                "function": {
-                    "name": "stardew_join",
-                    "description": "让 AI 伙伴作为同伴加入当前星露谷游戏世界（spawn），并可选设为指定模式。用户邀请一起进星露谷时调用。参数 companion 可选（Companion1/Companion2），mode 默认 player。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "companion": {"type": "string", "description": "同伴名，如 Companion1/Companion2（可选）"},
-                            "mode": {"type": "string", "description": "模式：player/follow/farm/mine/fish/stay，默认 player"},
-                        },
-                        "required": [],
-                    },
-                },
-            })
-        tools.ALL_TOOLS = base + mcp_schemas + extra
+        tools.ALL_TOOLS = base + mcp_schemas
 
     # ---------------- 对外启停 ----------------
 
     def load(self):
         """启动时加载所有 enabled 的 MCP 服务并注册工具。
 
-        遵守总开关 STARDEW_MCP_ENABLED（关闭则不启动任何 MCP，完全离线）。
-        每个 server 再按 config/mcp.json 的 enabled 字段决定是否启动。
+        读取 config/mcp.json，按每个 server 的 enabled 字段决定是否启动。
         """
-        from core.config import STARDEW_MCP_ENABLED
-        if not STARDEW_MCP_ENABLED:
-            # 总开关关闭：不启动任何 MCP（保持零影响、完全离线）
-            self.manager.close()
-            return
         try:
             self.manager.load()
         except Exception as e:
@@ -218,104 +172,6 @@ class McpRegistry:
                     "tool_names": [t.get("name", "") for t in tools_list][:50]}
         except Exception as e:
             return {"ok": False, "name": name, "message": f"测试失败: {e}"}
-
-    # ---------------- 星露谷自主游玩心跳（MCP 扩展） ----------------
-
-    def ensure_heartbeat(self):
-        """惰性构建星露谷自主游玩心跳（作为 MCP 扩展由后台统一管理）。
-
-        星露谷特有逻辑已收敛到 stardew.boot（boot.build_heartbeat），
-        这里只做委托，不内嵌星露谷实现。
-        """
-        if getattr(self, "_heartbeat", None) is None:
-            try:
-                from core.config import STARDEW_AUTONOMY_INTERVAL, STARDEW_AUTONOMY_LLM_ENABLED
-                from stardew.boot import build_heartbeat
-                self._heartbeat = build_heartbeat(
-                    interval=float(STARDEW_AUTONOMY_INTERVAL),
-                    llm_enabled=bool(STARDEW_AUTONOMY_LLM_ENABLED),
-                )
-            except Exception as e:
-                log_error("MCP", f"构建星露谷自主游玩心跳失败: {e}")
-                self._heartbeat = None
-        return self._heartbeat
-
-    def set_llm_adapter(self, adapter):
-        """把 LLM 适配器接线到星露谷自主游玩心跳（LLM 决策版用）。"""
-        hb = self.ensure_heartbeat()
-        if hb is not None:
-            try:
-                from core.config import STARDEW_AUTONOMY_LLM_ENABLED
-                hb.set_llm_adapter(adapter)
-                if STARDEW_AUTONOMY_LLM_ENABLED:
-                    hb.set_llm_enabled(True)
-            except Exception as e:
-                log_error("MCP", f"接线星露谷心跳 LLM 适配器失败: {e}")
-
-    @property
-    def heartbeat(self):
-        return self.ensure_heartbeat()
-
-    def start_heartbeat(self) -> dict:
-        """启动星露谷自主游玩心跳（需 MCP 已就绪、总开关已开）。"""
-        hb = self.ensure_heartbeat()
-        if hb is None:
-            return {"ok": False, "message": "星露谷自主游玩心跳不可用（未装插件）"}
-        if not self.manager.servers:
-            return {"ok": False, "message": "星露谷 MCP 服务未运行，请先启动 MCP"}
-        try:
-            hb.set_enabled(True)
-            return {"ok": True, "running": bool(hb._thread and hb._thread.is_alive()),
-                    "message": "星露谷自主游玩心跳已启动"}
-        except Exception as e:
-            log_error("MCP", f"启动星露谷自主游玩心跳失败: {e}")
-            return {"ok": False, "message": f"启动失败: {e}"}
-
-    def stop_heartbeat(self) -> dict:
-        hb = self.ensure_heartbeat()
-        if hb is None:
-            return {"ok": False, "message": "星露谷自主游玩心跳不可用"}
-        try:
-            hb.set_enabled(False)
-            return {"ok": True, "running": False, "message": "星露谷自主游玩心跳已停止"}
-        except Exception as e:
-            log_error("MCP", f"停止星露谷自主游玩心跳失败: {e}")
-            return {"ok": False, "message": f"停止失败: {e}"}
-
-    def heartbeat_status(self) -> dict:
-        hb = self.ensure_heartbeat()
-        if hb is None:
-            return {"available": False, "running": False, "enabled": False}
-        return {"available": True, **hb.status()}
-
-    def set_heartbeat_llm(self, enabled: bool) -> dict:
-        """运行时切换星露谷心跳的 LLM 决策开关。"""
-        hb = self.ensure_heartbeat()
-        if hb is None:
-            return {"ok": False, "message": "星露谷自主游玩心跳不可用"}
-        if enabled and hb.llm_adapter is None:
-            return {"ok": False, "message": "LLM 适配器未装配，无法开启 LLM 决策"}
-        try:
-            hb.set_llm_enabled(bool(enabled))
-            return {"ok": True, "llm_enabled": bool(hb.llm_enabled), "message": "已切换 LLM 决策开关"}
-        except Exception as e:
-            log_error("MCP", f"切换星露谷心跳 LLM 决策失败: {e}")
-            return {"ok": False, "message": f"切换失败: {e}"}
-
-    def feed_heartbeat_command(self, text: str) -> bool:
-        """把玩家聊天里的星露谷行动指令喂给自主游玩心跳（有指令听指令，没指令自己判断）。
-
-        属于星露谷 MCP 扩展（插件域）归口：仅当心跳存在时投递，不影响主项目。
-        未启动/未构建心跳时静默返回 False，不抛错、不污染调用方。
-        """
-        try:
-            hb = self.ensure_heartbeat()
-            if hb is None or not getattr(hb, "enabled", False):
-                return False
-            return bool(hb.feed_command(text))
-        except Exception as e:
-            log_error("MCP", f"投递星露谷指令失败: {e}")
-            return False
 
     # ---------------- 内部 ----------------
 

@@ -99,23 +99,10 @@ MEMORY_IMPORTANCE_THRESHOLD = float(os.getenv("MEMORY_IMPORTANCE_THRESHOLD", "0.
 MEMORY_FACT_DECAY_DAYS = _int(os.getenv("MEMORY_FACT_DECAY_DAYS"), 90)
 MEMORY_DEBUG = _bool(os.getenv("MEMORY_DEBUG"))
 
-# ===================== 外部 MCP 扩展（星露谷等） =====================
-# 是否启用外部 MCP 游戏扩展（默认关闭：他人拉取无游戏/无环境也不受影响）。
-# 开启后才会去读取 config/mcp.json 并注册 stardew 工具；关闭时这些工具完全不注册。
-# 可在管理后台 /admin/config 里修改。
-STARDEW_MCP_ENABLED = _bool(os.getenv("STARDEW_MCP_ENABLED", "false"))
-# 星露谷记忆自动沉淀：开启后后台轮询游戏状态并写入记忆（需 STARDEW_MCP_ENABLED 也开启）
-STARDEW_MEMORY_POLLER_ENABLED = _bool(os.getenv("STARDEW_MEMORY_POLLER_ENABLED", "false"))
-# 星露谷状态轮询间隔（秒）
-STARDEW_POLL_INTERVAL = _int(os.getenv("STARDEW_POLL_INTERVAL"), 60)
-# 星露谷自主游玩心跳：开启后让 AI 伙伴在游戏里低频自主动作（进场/存在感动作）。
-# 属星露谷 MCP 的扩展能力，由后台「📦 MCP 管理」页统一启停；需 STARDEW_MCP_ENABLED 也开。
-STARDEW_AUTONOMY_ENABLED = _bool(os.getenv("STARDEW_AUTONOMY_ENABLED", "false"))
-# 星露谷自主游玩心跳间隔（秒）
-STARDEW_AUTONOMY_INTERVAL = _float(os.getenv("STARDEW_AUTONOMY_INTERVAL", "30"), 30.0)
-# 星露谷自主游玩心跳：LLM 决策版（默认关）。开启后每轮由 LLM 基于游戏快照 + 星露谷工具
-# 自主选下一个动作；需要 LLM 适配器已装配；LLM 失败/不可用自动回退规则版。
-STARDEW_AUTONOMY_LLM_ENABLED = _bool(os.getenv("STARDEW_AUTONOMY_LLM_ENABLED", "false"))
+# ===================== 外部 MCP 扩展（可插拔插件） =====================
+# MCP 服务由 core.mcp_registry 全权管理：读取 config/mcp.json 声明并按
+# 每个 server 的 enabled 开关插件化启停，运行时可动态增删 mcp_* 工具。
+# 总开关：是否启用外部 MCP 扩展（默认关闭：他人拉取无游戏/无环境也不受影响）。
 
 # ===================== TTS（GPT-SoVITS 语音合成） =====================
 # 让 LLM 的回复"说出来"：把最终回复文本交给本地 GPT-SoVITS 合成成人声并播放。
@@ -280,12 +267,6 @@ EDITABLE_KEYS = {
     "MEMORY_DEBUG": ("调试输出", "bool", MEMORY_DEBUG),
     "BAIDU_API_KEY": ("百度搜索 Key", "str", BAIDU_API_KEY),
     "LIVE2D_BODY_MODE": ("Live2D 情绪表达模式 (B/C)", "str", LIVE2D_BODY_MODE),
-    "STARDEW_MCP_ENABLED": ("星露谷 MCP 扩展", "bool", STARDEW_MCP_ENABLED),
-    "STARDEW_MEMORY_POLLER_ENABLED": ("星露谷记忆自动沉淀", "bool", _bool(os.getenv("STARDEW_MEMORY_POLLER_ENABLED", "false"))),
-    "STARDEW_POLL_INTERVAL": ("星露谷状态轮询间隔(秒)", "float", float(os.getenv("STARDEW_POLL_INTERVAL", "60"))),
-    "STARDEW_AUTONOMY_ENABLED": ("星露谷自主游玩心跳", "bool", STARDEW_AUTONOMY_ENABLED),
-    "STARDEW_AUTONOMY_INTERVAL": ("星露谷自主游玩间隔(秒)", "float", STARDEW_AUTONOMY_INTERVAL),
-    "STARDEW_AUTONOMY_LLM_ENABLED": ("星露谷自主游玩心跳·LLM决策", "bool", STARDEW_AUTONOMY_LLM_ENABLED),
     "ENVIRONMENT_SENSING_ENABLED": ("浏览器感知（标签页/前台窗口/摘要）总开关", "bool", ENVIRONMENT_SENSING_ENABLED),
     "BROWSER_DEBUG_PORT": ("浏览器远程调试端口", "int", BROWSER_DEBUG_PORT),
     "BROWSER_TAB_SENSING_ENABLED": ("标签页感知（读当前浏览器标签）", "bool", BROWSER_TAB_SENSING_ENABLED),

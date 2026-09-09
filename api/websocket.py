@@ -57,10 +57,6 @@ def get_room_scheduler():
     return _room_scheduler
 
 
-# 星露谷"游戏行动"关键词闸门与指令投喂已收敛到 stardew.boot.feed_command，
-# 主代码（websocket）只做依赖调用，不内嵌星露谷实现逻辑。
-
-
 def setup_websocket(app) -> AppInitializer:
     return app
 
@@ -99,14 +95,6 @@ def register(app, initializer: AppInitializer):
                     continue
                 if not content:
                     continue
-
-                # 星露谷扩展归口：若有"游戏行动"意味的指令，喂给自主游玩心跳
-                # （逻辑收敛到 stardew.boot.feed_command，插件域，不影响主项目对话）。
-                try:
-                    from stardew.boot import feed_command
-                    feed_command(initializer, content)
-                except Exception:
-                    pass
 
                 agent = initializer.agent_factory.get_agent(user_id, new_role)
                 # 通知前端开始处理（广播给该 user 的所有窗口）

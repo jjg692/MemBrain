@@ -505,7 +505,7 @@ except Exception:
 
 # MCP 服务工具集（插件化）。
 # MCP 服务的加载/启停由 core.mcp_registry 全权管理（配合 config/mcp.json 的
-# enabled 开关与 STARDEW_MCP_ENABLED 总开关），运行时动态增删 mcp_* 工具。
+# enabled 开关），运行时动态增删 mcp_* 工具。
 # 此处无需静态持有 MCP 引用；registry 直接引用本模块的 ALL_TOOLS / TOOL_REGISTRY。
 
 

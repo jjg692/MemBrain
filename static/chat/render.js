@@ -151,7 +151,7 @@ export function removeThinking() { const t = $('thinkingMsg'); if (t) t.remove()
 
 // ===================== 群聊：角色轮流打字指示器（A 阶段） =====================
 // 用房间内 id 化的 thinking 气泡，支持多个角色同时"正在思考"。
-let roomTurnSeq = 014;
+let roomTurnSeq = 0;
 export function showRoomThinking(roleId) {
   // 若该角色已在思考中，不重复添加
   if ($(`roomThink_${roleId}`)) { const el = $(`roomThink_${roleId}`); el.classList.add('thinking'); return; }

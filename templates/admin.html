@@ -81,7 +81,6 @@
     <div class="snav-item" data-panel="tts">🔊 TTS 语音</div>
     <div class="snav-item" data-panel="config">⚙️ 配置管理</div>
     <div class="snav-sep"></div>
-    <div class="snav-item" data-panel="stardew">🌾 星露谷</div>
     <div class="snav-item" data-panel="mcp">📦 MCP 管理</div>
   </div>
   <div class="content">
@@ -290,35 +289,11 @@
     </div>
   </div>
 
-  <!-- ===== 星露谷 ===== -->
-  <div class="panel" id="panel-stardew">
-    <div class="card">
-      <h3>🌾 星露谷 MCP 管理</h3>
-      <div class="stat-grid" style="margin-bottom:16px">
-        <div class="stat-box"><div class="num" id="sdEnabled">—</div><div class="label">扩展开关</div></div>
-        <div class="stat-box"><div class="num" id="sdTools">—</div><div class="label">已注册工具</div></div>
-        <div class="stat-box"><div class="num" id="sdPoll">—</div><div class="label">记忆轮询</div></div>
-        <div class="stat-box"><div class="num" id="sdEvents">—</div><div class="label">已沉淀事件</div></div>
-      </div>
-      <p class="hint" style="margin-bottom:12px">扩展默认<span style="color:#e6a23c">关闭</span>。开启请在「配置管理」中把 <code>星露谷 MCP 扩展</code> (STARDEW_MCP_ENABLED) 设为 <code>true</code> 并<b>重启后端</b>；记忆自动沉淀默认也关，可把 <code>星露谷记忆自动沉淀</code> (STARDEW_MEMORY_POLLER_ENABLED) 设为 <code>true</code>（同样需重启）。</p>
-      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px">
-        <button class="btn btn-blue" onclick="testStardew()">🔌 测试 MCP 链路</button>
-        <button class="btn btn-green" onclick="loadStardew()">🔄 刷新状态</button>
-        <button class="btn btn-gray" onclick="refreshStardew()">⚡ 立即读取游戏状态</button>
-      </div>
-      <div id="sdTestResult" class="hint" style="margin-bottom:14px"></div>
-      <h4 style="margin:10px 0 6px">当前游戏状态</h4>
-      <pre id="sdState" style="background:#fafafa;border:1px solid #eee;border-radius:6px;padding:10px;font-size:12px;white-space:pre-wrap;max-height:240px;overflow:auto">等待读取…</pre>
-      <h4 style="margin:14px 0 6px">最近游戏记忆</h4>
-      <div id="sdMemories" class="hint" style="line-height:1.7">尚未读取。</div>
-    </div>
-  </div>
-
   <!-- ===== MCP 管理（可插拔插件 · 后台启停） ===== -->
   <div class="panel" id="panel-mcp">
     <div class="card">
       <h3>📦 MCP 服务管理</h3>
-      <p class="hint" style="margin-bottom:12px">每个 MCP（含星露谷）以可插拔插件格式声明在 <code>config/mcp.json</code>。可在此<b>后台启停</b>（无需重启后端）：停止会注销其工具并让新会话不再看到它们；启动会注册工具并重建 Agent（下次会话生效）。</p>
+      <p class="hint" style="margin-bottom:12px">每个 MCP 以可插拔插件格式声明在 <code>config/mcp.json</code>。可在此<b>后台启停</b>（无需重启后端）：停止会注销其工具并让新会话不再看到它们；启动会注册工具并重建 Agent（下次会话生效）。</p>
       <div style="margin-bottom:12px"><button class="btn btn-blue" onclick="loadMcp()">🔄 刷新</button></div>
       <table id="mcpTable">
         <thead><tr>
@@ -327,26 +302,6 @@
         <tbody></tbody>
       </table>
       <div id="mcpDetail" class="hint" style="margin-top:14px"></div>
-    </div>
-
-    <div class="card">
-      <h3>🌾 星露谷扩展 · 自主游玩心跳</h3>
-      <p class="hint" style="margin-bottom:12px">让 AI 伙伴在游戏里自主动作，像真联机的同伴：<b>有指令听指令、没指令自己判断</b>。你在对话里说「跟我一起种地 / 去浇水 / 来农场挖矿」等带行动意图的话，会立即喂给心跳（LLM 决策版开启时）翻译成真正的移动/用工具动作，不用再等 30 秒。需先「启动」上方 stardew MCP 服务。</p>
-      <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:10px">
-        <div>
-          <span style="font-size:13px">状态：</span>
-          <span id="hbStatus" style="font-weight:600; color:#999">未知</span>
-        </div>
-        <button class="btn btn-green" onclick="hbStart()">▶ 启动心跳</button>
-        <button class="btn btn-red" onclick="hbStop()">⏹ 停止心跳</button>
-        <button class="btn btn-gray" onclick="hbStatusRefresh()">🔄 刷新</button>
-        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px">
-          <input type="checkbox" id="hbLlmToggle" onchange="hbToggleLlm(this.checked)" style="width:auto">
-          LLM 决策版（规则兜底）
-        </label>
-      </div>
-      <div class="hint" id="hbDetail"></div>
-      <pre id="hbLog" style="margin-top:10px; background:#fafafa;border:1px solid #eee;border-radius:6px;padding:10px;font-size:12px;white-space:pre-wrap;max-height:160px;overflow:auto">—</pre>
     </div>
   </div>
   </div><!-- /content -->

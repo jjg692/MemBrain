@@ -66,8 +66,6 @@ async def startup():
     initializer.start_l3_loops()
     # 启动日程/提醒引擎（到点主动提醒 → WS 推送）
     initializer.start_reminder_scheduler()
-    # 启动星露谷状态轮询（可选扩展；开关关闭时为空操作）
-    initializer.start_stardew_poller()
     # 启动主动性常驻心跳（低频主动开口；PROACTIVITY_ENABLED 关闭时为空操作）
     initializer.start_proactive_heartbeat()
     log_info("Startup", "启动完成")

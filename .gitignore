@@ -28,28 +28,8 @@ relation_memory_*.json
 # 本地回滚备份区域（不进 git）
 /backup/
 
-# ===================== 星露谷 MCP 扩展（stardew/） =====================
-# 整个 stardew/ 目录从 git 跟踪中移除（本地保留），不再纳入版本库。
-# 含第三方 StardewValley-MCP server 与项目自制接入代码。
-/stardew/
-
-# ===================== 星露谷 MCP 扩展（stardew/） =====================
-# 整个 stardew/ 目录从 git 跟踪中移除（本地保留），不再纳入版本库。
-/stardew/
-# 依赖 stardew/ 的星露谷测试文件也一并移出（本地保留）
-test/fake_stardew_mcp.py
-test/stardew_test.py
-test/stardew_e2e_test.py
-test/ollama/test_stardew_runtime.py
-test/ollama/test_heartbeat.py
-test/ollama/test_autonomy.py
-test/ollama/test_game_memory.py
-
 # ===================== 本地工具（tools/） =====================
 /tools/
-
-# ===================== 红警 MO 接入插件（redalertmo/） =====================
-redalertmo/
 
 # ===================== 每角色 TTS 配置（本地机器专属路径） =====================
 # 每角色 TTS 服务的权重/参照音频/执行文件路径是本机专属，不入库；生成的 yaml 同理

@@ -2,7 +2,7 @@
 // 编排：状态 + WS + 渲染 + 事件绑定。后端接口契约不变。
 
 import { state, cacheKey, setMyName, initMyName } from './state.js';
-import { apiPost, saveProfile, fetchContacts, createRoom, joinRoom, fetchRoomConfig, saveRoomConfig } from './api.js';
+import { apiPost, saveProfile, fetchContacts, createRoom as apiCreateRoom, joinRoom, fetchRoomConfig, saveRoomConfig as apiSaveRoomConfig } from './api.js';
 import { WSClient, makeUrl } from './ws.js';
 import {
   myNameInitial, renderMyName, renderContacts, loadRoomsIntoList,
@@ -104,7 +104,7 @@ async function saveRoomConfig() {
       weight: parseFloat(document.querySelector(`.rc-weight[data-role="${cb.dataset.role}"]`).value) || 1,
     };
   });
-  const json = await saveRoomConfig(roomId, cfg);
+  const json = await apiSaveRoomConfig(roomId, cfg);
   if (json && json.code === 0) { toast('已保存', 'success'); closeRoomConfigModal(); }
   else toast('保存失败');
 }
@@ -283,12 +283,38 @@ function populateRoleSelect() {
   };
 }
 
+// 联系人加载：首次失败时自动重试（指数退避 → 封顶），
+// 解决桌面/web 端在“后端启动时序”下提前加载导致联系人为空的问题。
+// 联系人属关键初始化资源，后端最终会就绪，故重试直到成功为止。
+// 重试间隔：1s → 2s → 4s → … 封顶 10s（进程内存存续，跨调用保持）
+let _contactsRetryStep = 0;
+function _contactsRetryDelay() {
+  const delay = Math.min(1000 * Math.pow(2, _contactsRetryStep), 10000);
+  _contactsRetryStep = Math.min(_contactsRetryStep + 1, 4);
+  return delay;
+}
+
+let _contactsRetryTimer = null;
+function _clearContactsRetry() { if (_contactsRetryTimer) { clearTimeout(_contactsRetryTimer); _contactsRetryTimer = null; } }
+
 async function loadContacts() {
-  const json = await fetchContacts();
-  state.contacts = (json && json.data) || [];
-  renderContacts();
-  populateRoleSelect();
-  populateRoomMemberList();
+  try {
+    const json = await fetchContacts();
+    const list = (json && json.data) || [];
+    if (json && Array.isArray(list)) {
+      state.contacts = list;
+      _clearContactsRetry();
+      renderContacts();
+      populateRoleSelect();
+      populateRoomMemberList();
+      return;
+    }
+    throw new Error('contacts payload 无效');
+  } catch (e) {
+    console.warn('加载联系人失败，将在稍后自动重试:', e);
+    _clearContactsRetry();
+    _contactsRetryTimer = setTimeout(() => loadContacts(), _contactsRetryDelay());
+  }
 }
 
 // ===================== 群聊创建弹窗 =====================
@@ -301,7 +327,7 @@ async function createRoom() {
   const topic = $('roomTopicInput').value.trim();
   const members = [...document.querySelectorAll('.room-member-cb:checked')].map(cb => cb.value);
   if (!roomId) { toast('请输入群聊名称'); return; }
-  const json = await createRoom(roomId, topic);
+  const json = await apiCreateRoom(roomId, topic);
   if (!json || json.code !== 0) { toast((json && json.message) || '创建失败'); return; }
   for (const roleId of members) {
     await joinRoom(roomId, roleId);

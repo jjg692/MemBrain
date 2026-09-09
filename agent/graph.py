@@ -724,25 +724,6 @@ class LangGraphMemoryAgent:
         except Exception:
             pass
 
-        # 星露谷 MCP 能力引导：仅当 MCP 工具集里确有星露谷桥接工具时告知 LLM，
-        # 让 AI 伙伴能"自主"进场/感知/参与星露谷。未开扩展时不提（不伪造）。
-        # 文本生成已收敛到 stardew.boot.capability_text，主代码只做依赖调用。
-        try:
-            from core.tools import TOOL_REGISTRY
-            from stardew.boot import capability_text
-            _has_stardew = any(
-                k.startswith("mcp_") and ("stardew_" in k) for k in TOOL_REGISTRY
-            )
-            _can_join = any(k.startswith("mcp_") and k.endswith("stardew_spawn")
-                            for k in TOOL_REGISTRY)
-        except Exception:
-            _has_stardew = False
-            _can_join = False
-        if _has_stardew:
-            _cap = capability_text(_has_stardew, _can_join)
-            if _cap:
-                lines.append(_cap)
-
         if room_context:
             lines.append("【当前群聊上下文】\n" + room_context)
         return "\n\n".join(lines)

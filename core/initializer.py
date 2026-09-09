@@ -99,16 +99,11 @@ class AppInitializer:
         from core.mcp_registry import get_mcp_registry
         self.mcp_registry = get_mcp_registry()
         self.mcp_registry.agent_invalidator = self.agent_factory.invalidate_all
-        # 启动时加载 enabled 的 MCP 服务并注册工具（受 STARDEW_MCP_ENABLED 总开关控制）
+        # 启动时加载 enabled 的 MCP 服务并注册工具（受 config/mcp.json 的 enabled 控制）
         try:
             self.mcp_registry.load()
         except Exception as e:
             log_error("MCP", f"MCP 启动加载失败（跳过）: {e}")
-        # 为星露谷自主游玩心跳接线 LLM 适配器（LLM 决策版用；未开则空操作）
-        try:
-            self.mcp_registry.set_llm_adapter(self.llm_adapter)
-        except Exception as e:
-            log_error("MCP", f"接线星露谷心跳 LLM 适配器失败（跳过）: {e}")
 
         # L3 主动信息池（采集 + 推送）
         self.l3_collector = L3Collector(self.memory, self.tool_adapter)
@@ -146,17 +141,6 @@ class AppInitializer:
             perception=self.perception,
             push_callback=self._proactive_push_callback,
         ) if PROACTIVITY_ENABLED else None
-
-        # 星露谷运行时桥（可选扩展）：游戏状态自动沉淀记忆。
-        # 构建逻辑已收敛到 stardew.boot（boot.build_poller），这里只做依赖调用；
-        # 未启用/不可用时返回 None（不抛错）。
-        self.stardew_poller = None
-        try:
-            from stardew.boot import build_poller
-            self.stardew_poller = build_poller(self.memory_manager, role_id="kasumi")
-        except Exception as e:
-            log_error("Stardew", f"星露谷运行时桥初始化失败（跳过）: {e}")
-            self.stardew_poller = None
 
         log_info("Init", "AppInitializer 组装完成")
 
@@ -239,21 +223,6 @@ class AppInitializer:
         if self._l3_stop is not None:
             self._l3_stop.set()
             log_info("L3", "L3 线程已请求停止")
-
-    def start_stardew_poller(self):
-        """启动星露谷状态轮询（委托 stardew.boot.start_poller）"""
-        try:
-            from stardew.boot import start_poller
-            start_poller(self.stardew_poller)
-        except Exception as e:
-            log_error("Stardew", f"启动轮询失败: {e}")
-
-    def stop_stardew_poller(self):
-        try:
-            from stardew.boot import stop_poller
-            stop_poller(self.stardew_poller)
-        except Exception:
-            pass
 
     def start_proactive_heartbeat(self):
         """启动主动性常驻心跳（幂等）。仅 PROACTIVITY_ENABLED 时才有实例。"""

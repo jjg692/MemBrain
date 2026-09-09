@@ -13,7 +13,6 @@ document.querySelectorAll('.snav-item').forEach(tab=>{
     const p=tab.dataset.panel;
     if(p==='render') loadRenderRoles();
     if(p==='model') loadModelRows();
-    if(p==='stardew') loadStardew();
     if(p==='mcp') loadMcp();
     if(p==='tts'){ loadTts(); loadTtsRoles(); }
   };
@@ -687,53 +686,6 @@ function fileBrowsePick(fullPath){
   toast('已选择路径');
 }
 
-async function loadStardew(){
-  try{
-    const res=await fetch('/admin/stardew/status'); const json=await res.json();
-    const d=json.data||{};
-    $('sdEnabled').textContent = d.enabled ? '开' : '关';
-    $('sdEnabled').style.color = d.enabled ? '#07c160' : '#999';
-    $('sdTools').textContent = d.tools_count!=null?d.tools_count:0;
-    const p=d.poller||{};
-    const run = p.running!==undefined ? (p.running?'运行中':'停止') : '—';
-    $('sdPoll').textContent = run;
-    $('sdPoll').style.color = p.running ? '#07c160' : (d.enabled?'#e6a23c':'#999');
-    $('sdEvents').textContent = p.recorded_events!=null?p.recorded_events:0;
-    const state=p.current_state;
-    $('sdState').textContent = state ? JSON.stringify(state,null,2) : (p.last_error||'尚无游戏状态（游戏未开 / bridge 未就绪 / 未开启扩展）');
-    // 最近记忆
-    const mems=(d.memories||'').trim();
-    const box=$('sdMemories');
-    if(mems){
-      box.className=''; box.style.cssText='line-height:1.7';
-      box.innerHTML=mems.split('\n').map(m=>'<div style="padding:4px 0;border-bottom:1px solid #f2f2f2">'+esc(m)+'</div>').join('');
-    } else {
-      box.className='hint'; box.innerHTML='暂无游戏记忆沉淀。';
-    }
-  }catch(e){
-    $('sdState').textContent='读取失败: '+e;
-  }
-}
-async function testStardew(){
-  const box=$('sdTestResult');
-  box.textContent='测试中…'; box.style.color='#666';
-  try{
-    const res=await fetch('/admin/stardew/test',{method:'POST'}); const json=await res.json();
-    const d=json.data||{};
-    if(d.ok){ box.textContent='✅ '+json.message; box.style.color='#07c160'; }
-    else { box.textContent='❌ '+(json.message||'链路异常'); box.style.color='#ff4d4f'; }
-    if(d.raw){ $('sdState').textContent=d.raw; }
-  }catch(e){ box.textContent='❌ 请求失败: '+e; box.style.color='#ff4d4f'; }
-}
-async function refreshStardew(){
-  const box=$('sdTestResult');
-  box.textContent='刷新中…'; box.style.color='#666';
-  try{
-    const res=await fetch('/admin/stardew/refresh',{method:'POST'}); const json=await res.json();
-    toast(json.message||'已刷新'); loadStardew();
-  }catch(e){ box.textContent='❌ '+e; box.style.color='#ff4d4f'; }
-}
-
 // ===== MCP 管理 =====
 async function loadMcp(){
   const tbody=document.querySelector('#mcpTable tbody'); tbody.innerHTML='<tr><td colspan="7" class="hint">加载中…</td></tr>';
@@ -773,7 +725,6 @@ async function loadMcp(){
       tbody.appendChild(tr);
     });
     $('mcpDetail').textContent='共 '+items.length+' 个 MCP 服务。点击「🔄 刷新」查看最新状态。';
-    hbStatusRefresh();
   }catch(e){
     tbody.innerHTML=`<tr><td colspan="7" class="hint">读取失败: ${esc(e)}（后端可能未包含最新 MCP 管理接口，请重启后端）</td></tr>`;
   }
@@ -809,45 +760,6 @@ async function mcpSetEnabled(name, enabled){
   const j=await res.json();
   toast((j.code===0?'✅ 已保存开关':'❌ '+(j.message||'保存失败'))+(enabled?'（启用，可在上方点击「启动」）':''));
   loadMcp();
-}
-
-// ===== 星露谷自主游玩心跳（MCP 扩展） =====
-async function hbStatusRefresh(){
-  try{
-    const res=await fetch('/admin/mcp/stardew-autonomy/status'); const j=await res.json();
-    const d=j.data||{};
-    const st=$('hbStatus');
-    if(!d.available){ st.textContent='不可用'; st.style.color='#999'; $('hbDetail').textContent='（星露谷心跳插件未加载）'; return; }
-    const run=d.running;
-    st.textContent=run?'● 运行中':'○ 已停止';
-    st.style.color=run?'#07c160':'#999';
-    const llmToggle=$('hbLlmToggle');
-    if(llmToggle){ llmToggle.checked=!!d.llm_enabled; llmToggle.disabled=!d.llm_available; }
-    let detail=`间隔 ${d.interval||30}s · tick ${d.tick||0} · 进场 ${d.enter||0} · 动作 ${d.act||0} · 跳过 ${d.skip||0}`;
-    if(d.llm_enabled) detail+=` · LLM决策 ${d.llm_act||0} / 规则 ${d.rule_act||0} / 回退 ${d.llm_fallback||0}`;
-    if(!d.llm_available) detail+=' · （LLM 决策不可用：无适配器）';
-    if(d.pending_command) detail+=` · 待执行指令: "${d.pending_command}"`;
-    if(d.last_error) detail+=' · 错误:'+d.last_error;
-    $('hbDetail').textContent=detail;
-  }catch(e){ $('hbDetail').textContent='读取失败: '+e; }
-}
-async function hbStart(){
-  const res=await fetch('/admin/mcp/stardew-autonomy/start',{method:'POST'});
-  const j=await res.json();
-  toast((j.code===0?'✅ ':'❌ ')+(j.message||''));
-  hbStatusRefresh();
-}
-async function hbStop(){
-  const res=await fetch('/admin/mcp/stardew-autonomy/stop',{method:'POST'});
-  const j=await res.json();
-  toast((j.code===0?'✅ ':'❌ ')+(j.message||''));
-  hbStatusRefresh();
-}
-async function hbToggleLlm(enabled){
-  const res=await fetch('/admin/mcp/stardew-autonomy/llm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
-  const j=await res.json();
-  toast((j.code===0?'✅ ':'❌ ')+(j.message||''));
-  hbStatusRefresh();
 }
 
 // ===== 初始化 =====

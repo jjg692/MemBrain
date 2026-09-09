@@ -376,7 +376,6 @@ python -m pytest test -q
 第三方组件版权归其各自作者：
 
 - 角色（《BanG Dream!》户山香澄等）版权归其原始版权方所有，本项目仅作本地演示用途。
-- 星露谷 MCP 桥接（`stardew/StardewValley-MCP`）来自开源项目 [luy-0/StardewValley-MCP](https://github.com/luy-0/StardewValley-MCP)（Apache-2.0），在仓库外维护，不在本仓库内。
 
 ---
 
