@@ -78,3 +78,9 @@ export function createRoom(roomId, topic) {
 export function joinRoom(roomId, roleId) {
   return apiPost(`/api/rooms/${encodeURIComponent(roomId)}/join`, { role_id: roleId });
 }
+export function fetchRoomConfig(roomId) {
+  return apiGet(`/api/rooms/${encodeURIComponent(roomId)}/config`);
+}
+export function saveRoomConfig(roomId, cfg) {
+  return apiPost(`/api/rooms/${encodeURIComponent(roomId)}/config`, cfg);
+}

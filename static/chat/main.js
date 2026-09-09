@@ -2,12 +2,13 @@
 // 编排：状态 + WS + 渲染 + 事件绑定。后端接口契约不变。
 
 import { state, cacheKey, setMyName, initMyName } from './state.js';
-import { apiPost, saveProfile, fetchContacts, createRoom, joinRoom } from './api.js';
+import { apiPost, saveProfile, fetchContacts, createRoom, joinRoom, fetchRoomConfig, saveRoomConfig } from './api.js';
 import { WSClient, makeUrl } from './ws.js';
 import {
   myNameInitial, renderMyName, renderContacts, loadRoomsIntoList,
   populateRoomMemberList, appendMessage, appendSystem, showThinking,
   removeThinking, loadHistory, loadRoomHistory, setOpenHooks,
+  showRoomThinking, removeRoomThinking, clearAllRoomThinking,
 } from './render.js';
 import { $ } from './ui.js';
 import { esc } from './escape.js';
@@ -21,6 +22,7 @@ function openPrivate(roleId) {
   state.activeRole = roleId;
   $('chatTitle').textContent = '私聊 · ' + (state.contacts.find(c => c.role_id === roleId)?.display_name || roleId);
   $('roleSelectWrap').style.display = 'flex';
+  $('roomConfigBtn').style.display = 'none';
   closeRoomWs();
   connectPrivateWs(roleId);
   $('msgList').innerHTML = '';
@@ -33,6 +35,7 @@ function openRoom(roomId) {
   state.activeKey = roomId;
   $('chatTitle').textContent = '群聊 · ' + roomId;
   $('roleSelectWrap').style.display = 'none';
+  $('roomConfigBtn').style.display = 'inline-block';
   closePrivateWs();
   connectRoomWs(roomId);
   $('msgList').innerHTML = '';
@@ -40,6 +43,72 @@ function openRoom(roomId) {
 }
 
 setOpenHooks(openPrivate, openRoom);
+
+// ===================== 群聊设置面板（C 阶段） =====================
+
+async function openRoomConfig() {
+  const roomId = state.activeKey;
+  if (state.activeType !== 'room' || !roomId) { toast('请先打开一个群聊'); return; }
+  const json = await fetchRoomConfig(roomId);
+  if (!json || json.code !== 0) { toast('获取房间配置失败'); return; }
+  const cfg = json.data || {};
+  const members = cfg.member_config || {};
+  const nameOf = (rid) => {
+    const c = state.contacts.find(x => x.role_id === rid);
+    return (c && c.display_name) || rid;
+  };
+  $('roomConfigBody').innerHTML = `
+    <div style="margin:10px 0"><label>是否启用角色接力互相搭话</label>
+      <select id="rc_enable_relay">
+        <option value="true" ${cfg.enable_relay ? 'selected' : ''}>启用</option>
+        <option value="false" ${cfg.enable_relay ? '' : 'selected'}>停用（只回应用户，不互相对话）</option>
+      </select></div>
+    <div style="margin:10px 0"><label>接力轮数（0=不接力，留空=默认）</label>
+      <input id="rc_relay_rounds" type="number" min="0" placeholder="默认"
+        value="${cfg.relay_rounds == null ? '' : cfg.relay_rounds}"></div>
+    <div style="margin:10px 0"><label>发言风格</label>
+      <select id="rc_relay_style">
+        <option value="weighted" ${cfg.relay_style === 'weighted' ? 'selected' : ''}>权重挑选（部分角色，避免话痨）(Recommended)</option>
+        <option value="all" ${cfg.relay_style === 'all' ? 'selected' : ''}>全员发言（每轮所有角色都开口）</option>
+      </select></div>
+    <div style="margin:10px 0"><label>并发上限（同时进行的生成数）</label>
+      <input id="rc_max_concurrency" type="number" min="1" value="${cfg.max_concurrency || 2}"></div>
+    <div style="margin:10px 0"><label>成员参与度</label>
+      <div id="rc_members"></div></div>
+  `;
+  const mc = $('rc_members');
+  mc.innerHTML = state.contacts.filter(c => (cfg.members || []).includes(c.role_id))
+    .map(c => `
+      <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
+        <span style="flex:1">${esc(nameOf(c.role_id))}</span>
+        <label style="font-size:12px"><input type="checkbox" data-role="${c.role_id}" class="rc-participate"
+          ${!(members[c.role_id] && members[c.role_id].participate === false) ? 'checked' : ''}> 参与</label>
+        <input class="rc-weight" data-role="${c.role_id}" type="number" min="0" step="0.1" style="width:60px"
+          placeholder="权重" value="${(members[c.role_id] && members[c.role_id].weight) || 1}">
+      </div>`).join('');
+  $('roomConfigModal').classList.add('show');
+}
+
+async function saveRoomConfig() {
+  const roomId = state.activeKey;
+  const cfg = {
+    enable_relay: $('rc_enable_relay').value === 'true',
+    relay_rounds: $('rc_relay_rounds').value === '' ? null : parseInt($('rc_relay_rounds').value, 10),
+    relay_style: $('rc_relay_style').value,
+    max_concurrency: parseInt($('rc_max_concurrency').value, 10) || 2,
+    member_config: {},
+  };
+  document.querySelectorAll('.rc-participate').forEach(cb => {
+    cfg.member_config[cb.dataset.role] = {
+      participate: cb.checked,
+      weight: parseFloat(document.querySelector(`.rc-weight[data-role="${cb.dataset.role}"]`).value) || 1,
+    };
+  });
+  const json = await saveRoomConfig(roomId, cfg);
+  if (json && json.code === 0) { toast('已保存', 'success'); closeRoomConfigModal(); }
+  else toast('保存失败');
+}
+function closeRoomConfigModal() { $('roomConfigModal').classList.remove('show'); }
 
 function updateActiveUI() {
   document.querySelectorAll('.contact-item').forEach(el => el.classList.remove('active'));
@@ -88,8 +157,14 @@ function connectRoomWs(roomId) {
     makeUrl(`/ws/room/${encodeURIComponent(roomId)}?role_id=web_user`),
     {
       onMessage: (d) => {
-        if (d.type === 'chat_message') {
+        if (d.type === 'room_turn') {
+          // A 阶段：角色轮流打字指示器
+          if (d.status === 'thinking') showRoomThinking(d.role_id);
+          else removeRoomThinking(d.role_id);
+        } else if (d.type === 'chat_message') {
           const m = d.data;
+          // 新真实消息到达时，清理对应角色的"正在思考"占位
+          if (m.sender_role) removeRoomThinking(m.sender_role);
           if (m.is_user) appendMessage({ role: 'user', content: m.content, sender: m.sender_role || 'user' });
           else if (m.msg_type === 'system') appendSystem(m.content);
           else appendMessage({ role: 'assistant', content: m.content, sender: m.sender_role });
@@ -253,10 +328,14 @@ function init() {
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
   });
   $('newRoomBtn').onclick = showRoomModal;
+  $('roomConfigBtn').onclick = openRoomConfig;
   $('searchInput').addEventListener('input', e => renderContacts(e.target.value.trim()));
   setupUserBar();
   window.closeRoomModal = closeRoomModal;
   window.createRoom = createRoom; // HTML 内 onclick 引用
+  window.closeRoomConfigModal = closeRoomConfigModal;
+  window.saveRoomConfig = saveRoomConfig;
+  window.openRoomConfig = openRoomConfig;
 
   // 加载
   loadContacts();

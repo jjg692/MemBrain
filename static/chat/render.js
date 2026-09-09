@@ -149,6 +149,31 @@ export function showThinking() {
 }
 export function removeThinking() { const t = $('thinkingMsg'); if (t) t.remove(); }
 
+// ===================== 群聊：角色轮流打字指示器（A 阶段） =====================
+// 用房间内 id 化的 thinking 气泡，支持多个角色同时"正在思考"。
+let roomTurnSeq = 014;
+export function showRoomThinking(roleId) {
+  // 若该角色已在思考中，不重复添加
+  if ($(`roomThink_${roleId}`)) { const el = $(`roomThink_${roleId}`); el.classList.add('thinking'); return; }
+  const seq = ++roomTurnSeq;
+  const div = document.createElement('div');
+  div.className = 'msg other thinking';
+  div.id = `roomThink_${roleId}`;
+  div.dataset.seq = seq;
+  const senderC = state.contacts.find(c => c.role_id === roleId);
+  const name = (senderC && senderC.display_name) || roleId;
+  div.innerHTML = `<div class="avatar" style="background:#07c160">✦</div><div class="msg-body"><div class="msg-bubble">${esc(name)} 正在思考…</div></div>`;
+  $('msgList').appendChild(div);
+  scrollBottom();
+}
+export function removeRoomThinking(roleId) {
+  const el = $(`roomThink_${roleId}`);
+  if (el) { el.remove(); }
+}
+export function clearAllRoomThinking() {
+  document.querySelectorAll('[id^="roomThink_"]').forEach(el => el.remove());
+}
+
 // ===================== 历史/缓存加载 =====================
 export async function loadHistory(roleId) {
   const key = 'private:default_user:' + roleId;
@@ -166,6 +191,7 @@ export async function loadHistory(roleId) {
 }
 
 export async function loadRoomHistory(roomId) {
+  clearAllRoomThinking();
   const key = 'room:' + roomId;
   if (state.messagesCache[key]) {
     state.messagesCache[key].forEach(m => appendMessage(m));

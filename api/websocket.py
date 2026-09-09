@@ -3,12 +3,12 @@ WebSocket 端点
 - /ws/chat：私聊（携带 user_id + role_id）
 - /ws/room/{room_id}：群聊（携带 room_id + role_id + content）
 
-群聊采用"接力对话"调度：
+群聊采用"接力对话"调度（A 阶段：交给 core.room.scheduler.RoomTurnScheduler）：
 1. 用户消息进 L0 并广播
-2. 首轮：所有成员并行对用户消息各回一句
-3. 接力轮：基于"包含所有人最新发言"的最新中国群聊上下文，让所有成员
-   "看到别人刚说的话"并再次自然接话，循环 ROOM_RELAY_ROUNDS 次，
-   形成角色之间互相搭话的多轮连续对话。
+2. 首轮：成员对用户消息各回一句（有界并发，受信号量约束）
+3. 接力轮：基于最新 L0 上下文，让成员互相搭话（按房间 relay_rounds，可配置）
+4. 用户新消息会打断当前接力并重启（可中途插话）
+调度器负责：有界并发、单角色超时、成员参与度/权重、room_turn 打字指示器、失败降级。
 """
 import asyncio
 import json
@@ -28,8 +28,33 @@ def _int(v, default):
         return default
 
 
-# 接力对话轮数（用户发言后的额外"角色互相搭话"轮次），可被环境变量覆盖
+# 全局默认接力轮数（用户发言后额外"角色互相搭话"轮次）；可由环境变量覆盖，
+# 也可被房间级 relay_rounds 按房间覆盖（C 阶段）。
 ROOM_RELAY_ROUNDS = _int(os.getenv("ROOM_RELAY_ROUNDS", ""), 2)
+# 全局默认并发上限
+ROOM_MAX_CONCURRENCY = _int(os.getenv("ROOM_MAX_CONCURRENCY", ""), 2)
+
+# 共享群聊调度器（单例）：首次 register 时惰性创建，绑定 initializer 的单例 bus + room_manager。
+_room_scheduler = None
+_scheduler_initializer = None
+
+
+def _init_scheduler(initializer):
+    """用 initializer 的 bus + room_manager 初始化共享调度器（幂等，避免多实例错配）。"""
+    global _room_scheduler, _scheduler_initializer
+    if _scheduler_initializer is initializer and _room_scheduler is not None:
+        return _room_scheduler
+    from core.room.scheduler import RoomTurnScheduler
+    _room_scheduler = RoomTurnScheduler(
+        initializer.message_bus, initializer.room_manager,
+        config={"relay_rounds": ROOM_RELAY_ROUNDS, "max_concurrency": ROOM_MAX_CONCURRENCY},
+    )
+    _scheduler_initializer = initializer
+    return _room_scheduler
+
+
+def get_room_scheduler():
+    return _room_scheduler
 
 
 # 星露谷"游戏行动"关键词闸门与指令投喂已收敛到 stardew.boot.feed_command，
@@ -115,36 +140,6 @@ def register(app, initializer: AppInitializer):
 
     # ===================== 群聊 =====================
 
-    def _room_user(room_id: str) -> str:
-        return "_room_" + room_id
-
-    async def _speak_all(room_id: str, members: dict, prompt: str) -> None:
-        """
-        让所有成员依次发言（顺序轮流，非并行）。
-
-        为什么顺序执行：
-        - 每个 agent.chat 都会触发主模型生成（Ollama/远程 LLM）。Ollama 对并发
-          请求会排队甚至卡死（曾出现整个 gather 挂起），顺序执行可避免并发打爆。
-        - 顺序轮流也更契合"接力对话"：每次发言前都取最新 L0 上下文，后面的角色
-          能看到前面角色刚说的话，形成自然的多轮互相搭话。
-
-        情感说明：群聊接力传 persist_emotion=False。角色之间的对话不属于"用户对
-        角色"的情感信号，不应更新对用户的感情/好感度，也避免每角色每轮重复做
-        情感分析（省调用、防误染私聊维度）。
-        """
-        for role, agent in members.items():
-            # 每次发言前都取最新 L0 上下文，保证彼此能看到最新发言（接力关键）
-            ctx = initializer.message_bus.get_formatted_context(room_id, n=30)
-            try:
-                reply = await asyncio.get_event_loop().run_in_executor(
-                    None, agent.chat, _room_user(room_id), prompt, None, ctx, False
-                )
-            except Exception as e:
-                log_error("Room", f"{role} 发言失败: {e}")
-                reply = ""
-            if reply and reply.strip():
-                await initializer.message_bus.send_agent_message(room_id, role, reply)
-
     @router.websocket("/ws/room/{room_id}")
     async def ws_room(ws: WebSocket, room_id: str, role_id: str = ""):
         await room_ws_manager.connect(room_id, ws)
@@ -170,17 +165,9 @@ def register(app, initializer: AppInitializer):
                     await initializer.message_bus.send_system_message(room_id, "房间还没有成员，快去邀请角色吧～")
                     continue
 
-                # 第 1 轮：所有成员依次对用户消息各回一句
-                await _speak_all(room_id, members, content)
-
-                # 接力轮：角色们互相搭话多轮，形成连续对话
-                for i in range(ROOM_RELAY_ROUNDS):
-                    await _speak_all(
-                        room_id, members,
-                        "（群聊接力：上面是群里最新对话。请以你自己的身份自然接一句话，"
-                        "回应/调侃/接续别人刚说的话，或补充一个观点。保持角色性格，简短自然，"
-                        "不要重复已经说过的话，不要一次说太多。）"
-                    )
+                # 交给调度器排演一轮接力（有界并发 + 超时 + 可打断 + 打字指示器）
+                scheduler = _init_scheduler(initializer)
+                scheduler.submit_user_message(room_id)
 
         except WebSocketDisconnect:
             room_ws_manager.disconnect(room_id, ws)

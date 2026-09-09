@@ -44,6 +44,7 @@
   .chat-header .role-select { display:flex; align-items:center; gap:8px; margin-left:auto; }
   .chat-header select { padding:6px 10px; border:1px solid #ddd; border-radius:6px; font-size:13px; outline:none; }
   .chat-header .new-room-btn { padding:6px 14px; background:var(--active); color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:13px; }
+  .chat-header .room-config-btn { padding:6px 12px; background:#fff; color:#555; border:1px solid #ddd; border-radius:6px; cursor:pointer; font-size:13px; }
   .msg-list { flex:1; overflow-y:auto; padding:20px; }
   .msg { display:flex; margin-bottom:18px; gap:10px; }
   .msg .avatar { width:40px; height:40px; border-radius:6px; background:#07c160; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:600; flex-shrink:0; }
@@ -107,6 +108,7 @@
   <main class="chat">
     <div class="chat-header">
       <div><strong id="chatTitle">请选择一个联系人</strong></div>
+      <button class="room-config-btn" id="roomConfigBtn" style="display:none">群聊设置 ⚙</button>
       <div class="role-select" id="roleSelectWrap" style="display:none">
         <span style="font-size:13px;color:#666">当前角色</span>
         <select id="roleSelect"></select>
@@ -140,6 +142,18 @@
       <div class="modal-actions">
         <button class="btn-cancel" onclick="closeRoomModal()">取消</button>
         <button class="btn-confirm" onclick="createRoom()">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 群聊设置弹窗（C 阶段） ===== -->
+  <div class="modal-mask" id="roomConfigModal">
+    <div class="modal">
+      <h3>群聊设置</h3>
+      <div id="roomConfigBody"></div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="closeRoomConfigModal()">取消</button>
+        <button class="btn-confirm" onclick="saveRoomConfig()">保存</button>
       </div>
     </div>
   </div>

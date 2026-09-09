@@ -59,3 +59,7 @@ config/tts_roles_configs/
 # ===================== 前端优化回滚备份（本地保留，不入库） =====================
 templates/*.bak
 
+# ===================== 群聊历史落盘（运行期数据，不入库） =====================
+rooms_history.json
+rooms_history.json.tmp
+

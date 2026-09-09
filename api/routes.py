@@ -181,4 +181,24 @@ def setup_routes(initializer: AppInitializer):
         msgs = app.message_bus.get_recent_messages(room_id, n)
         return {"code": 0, "data": [m.to_dict() for m in msgs]}
 
+    # ===================== 群聊房间配置（C 阶段） =====================
+
+    @router.get("/api/rooms/{room_id}/config")
+    async def get_room_config(room_id: str):
+        room = app.room_manager.get_room(room_id)
+        if not room:
+            return {"code": -1, "message": "房间不存在"}
+        return {"code": 0, "data": room.get_config()}
+
+    @router.post("/api/rooms/{room_id}/config")
+    async def set_room_config(room_id: str, request: Request):
+        body = await request.json()
+        room = app.room_manager.get_room(room_id)
+        if not room:
+            return {"code": -1, "message": "房间不存在"}
+        ok = app.room_manager.update_room_config(room_id, body or {})
+        if not ok:
+            return {"code": -1, "message": "更新失败"}
+        return {"code": 0, "data": room.get_config(), "message": "已保存"}
+
     return router
