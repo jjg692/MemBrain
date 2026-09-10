@@ -70,6 +70,11 @@
     user_id: params.get("user_id") || localStorage.getItem("membrain_userId") || "default_user",
     role_id: params.get("role_id") || "",
     runtimeLoaded: false,
+    // —— 双击聊天对话框 ——
+    dialogOpen: false,     // 对话框是否打开
+    dialogEl: null,        // 对话框 DOM 容器
+    dialogWs: null,        // 对话框专用的 sender 连接
+    dialogPending: false,  // 对话框等待回复中
   };
 
   // ============================================================
@@ -1500,6 +1505,200 @@
   }
 
   // ============================================================
+  // 双击聊天对话框（桌面模型上弹出一个与"单独对话"一致的对话框）
+  // ------------------------------------------------------------
+  // 说明：
+  //  - 模型窗自身的 WS 是 watcher（只接收提醒，不触发回复），以保持双窗口契约。
+  //  - 双击模型时，对话框**额外建立一条 mode=sender 的 /ws/chat 连接**
+  //    （同 user_id + role_id），后端 SingleConnectionManager 允许同 user 的
+  //    sender 与 watcher 共存，因此可与模型窗共享会话、自由收发。
+  //  - 对话框关闭时断开这条 sender 连接，恢复模型窗为纯 watcher。
+  //  - 双击用 debounce 区分：单击（快速点击且未拖动）触发原有 onPetTap 反应；
+  //    350ms 内再次点击判定为双击 → 打开对话框（替换掉待触发的单击反应）。
+  // ============================================================
+  var tapTimer = 0;          // 单击 debounce 计时器
+  var lastTapT = 0;          // 上一次单击时间戳（双击识别）
+
+  function openChatDialog() {
+    if (state.dialogOpen) { focusDialog(); return; }
+    ensureDialogEl();
+    state.dialogOpen = true;
+    state.dialogEl.classList.remove("hidden");
+    loadDialogHistory();
+    connectDialogWS();
+    bus.emit("activity");
+  }
+
+  function closeChatDialog() {
+    state.dialogOpen = false;
+    if (state.dialogEl) state.dialogEl.classList.add("hidden");
+    try { if (state.dialogWs) state.dialogWs.close(); } catch (e) {}
+    state.dialogWs = null;
+    state.dialogPending = false;
+  }
+
+  function focusDialog() {
+    if (!state.dialogEl) return;
+    var inp = state.dialogEl.querySelector(".l2d-dialog-input");
+    if (inp) { try { inp.focus(); } catch (e) {} }
+  }
+
+  // 创建对话框 DOM（仅一次，之后复用）
+  function ensureDialogEl() {
+    if (state.dialogEl) return;
+    var d = document.createElement("div");
+    d.className = "l2d-dialog hidden";
+    d.innerHTML =
+      '<div class="l2d-dialog-head">' +
+        '<span class="title">💬 <span class="role"></span></span>' +
+        '<span class="status">连接中…</span>' +
+        '<button class="l2d-dialog-close" title="关闭">✕</button>' +
+      '</div>' +
+      '<div class="l2d-dialog-body"></div>' +
+      '<div class="l2d-dialog-inputbar">' +
+        '<input class="l2d-dialog-input" type="text" placeholder="和她说点什么…" autocomplete="off">' +
+        '<button class="l2d-dialog-send">发送</button>' +
+      '</div>';
+    document.body.appendChild(d);
+    state.dialogEl = d;
+    var bodyEl = d.querySelector(".l2d-dialog-body");
+    var statusEl = d.querySelector(".l2d-dialog-head .status");
+    var roleTag = d.querySelector(".l2d-dialog-head .role");
+    // 角色名
+    roleTag.textContent = state.role_id || "角色";
+    // 关闭按钮
+    d.querySelector(".l2d-dialog-close").addEventListener("click", function (e) {
+      e.stopPropagation(); closeChatDialog();
+    });
+    // 发送
+    var inp = d.querySelector(".l2d-dialog-input");
+    var sendBtn = d.querySelector(".l2d-dialog-send");
+    function doSend() {
+      sendDialog(inp.value); inp.value = "";
+    }
+    sendBtn.addEventListener("click", function (e) { e.stopPropagation(); doSend(); });
+    inp.addEventListener("keydown", function (e) {
+      e.stopPropagation();
+      if (e.key === "Enter") doSend();
+    });
+    // 点击对话框内部不触发"摸宠物"
+    d.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    d.addEventListener("click", function (e) { e.stopPropagation(); });
+  }
+
+  // 追加一条消息到对话框
+  function appendDialogMsg(text, kind, who) {
+    if (!state.dialogEl) return;
+    var bodyEl = state.dialogEl.querySelector(".l2d-dialog-body");
+    var d = document.createElement("div");
+    d.className = "l2d-dialog-msg " + (kind || "role");
+    if (who) { var w = document.createElement("span"); w.className = "who"; w.textContent = who; d.appendChild(w); }
+    var t = document.createElement("span");
+    if (kind === "thinking") t.textContent = text || "…";
+    else t.textContent = text || "";
+    d.appendChild(t);
+    bodyEl.appendChild(d);
+    bodyEl.scrollTop = bodyEl.scrollHeight;
+  }
+
+  // 加载历史消息（同 /live2d-chat 一致：/api/history）
+  async function loadDialogHistory() {
+    if (!state.dialogEl) return;
+    var bodyEl = state.dialogEl.querySelector(".l2d-dialog-body");
+    bodyEl.innerHTML = "";
+    if (!state.role_id) {
+      var e = document.createElement("div");
+      e.className = "l2d-dialog-empty"; e.textContent = "（尚无角色，可先用顶部切换或后台配置）";
+      bodyEl.appendChild(e); return;
+    }
+    try {
+      var h = await fetch("/api/history?user_id=" + encodeURIComponent(state.user_id) +
+                          "&role_id=" + encodeURIComponent(state.role_id)).then(function (r) { return r.json(); });
+      var items = (h.data || []);
+      if (!items.length) {
+        var e = document.createElement("div");
+        e.className = "l2d-dialog-empty"; e.textContent = "（还没有对话，双击她说点什么吧）";
+        bodyEl.appendChild(e);
+      }
+      var whoUser = localStorage.getItem("membrain_myName") || "我";
+      var whoRole = state.role_id;
+      items.forEach(function (it) {
+        if (it.role === "user") appendDialogMsg(it.content, "user", whoUser);
+        else appendDialogMsg(it.content, "role", whoRole);
+      });
+    } catch (e) {}
+  }
+
+  // 对话框专用 sender 连接
+  function connectDialogWS() {
+    if (!state.role_id) return;
+    try { if (state.dialogWs) state.dialogWs.close(); } catch (e) {}
+    var proto = location.protocol === "https:" ? "wss://" : "ws://";
+    var url = proto + location.host + "/ws/chat?user_id=" + encodeURIComponent(state.user_id) +
+              "&role_id=" + encodeURIComponent(state.role_id) + "&mode=sender";
+    var ws = new WebSocket(url);
+    state.dialogWs = ws;
+    var statusEl = state.dialogEl ? state.dialogEl.querySelector(".l2d-dialog-head .status") : null;
+    var sendBtn = state.dialogEl ? state.dialogEl.querySelector(".l2d-dialog-send") : null;
+    ws.onopen = function () { if (statusEl) statusEl.textContent = "在线"; };
+    ws.onmessage = function (evt) {
+      var m; try { m = JSON.parse(evt.data); } catch (e) { return; }
+      if (m.type === "connected") { if (statusEl) statusEl.textContent = "在线"; }
+      else if (m.type === "thinking") {
+        state.dialogPending = true;
+        if (sendBtn) sendBtn.disabled = true;
+        appendDialogMsg("…", "thinking");
+      }
+      else if (m.type === "reply") {
+        state.dialogPending = false;
+        if (sendBtn) sendBtn.disabled = false;
+        appendDialogMsg(m.content || "", "role", state.role_id);
+        // 联动模型表情/口型（与 watcher 路径一致）
+        onRoleTalk(m.content || "", m.behavior);
+      }
+      else if (m.type === "proactive" || m.type === "reminder") {
+        appendDialogMsg(m.content || m.text || "", "role", state.role_id);
+        onRoleTalk(m.content || m.text || "", m.behavior);
+      }
+      else if (m.type === "behavior") {
+        onRoleTalk("", m);
+      }
+    };
+    ws.onclose = function () {
+      if (!state.dialogOpen) return;
+      if (statusEl) statusEl.textContent = "已断开，重连中…";
+      setTimeout(function () { if (state.dialogOpen) { try { connectDialogWS(); } catch (e) {} } }, 3000);
+    };
+  }
+
+  function sendDialog(text) {
+    text = (text || "").trim();
+    if (!text || !state.dialogWs || state.dialogWs.readyState !== 1 || state.dialogPending) return;
+    appendDialogMsg(text, "user", localStorage.getItem("membrain_myName") || "我");
+    state.dialogWs.send(JSON.stringify({ content: text }));
+    onUserSay();
+    bus.emit("activity");
+  }
+
+  // 单击 / 双击识别（debounce）：350ms 内的两次点击视为双击 → 打开对话框
+  function onPetClick(e) {
+    var now = Date.now();
+    if (now - lastTapT <= 350 && tapTimer) {
+      // 双击：取消待触发的单击反应，打开对话框
+      clearTimeout(tapTimer); tapTimer = 0; lastTapT = 0;
+      openChatDialog();
+      return;
+    }
+    lastTapT = now;
+    if (tapTimer) clearTimeout(tapTimer);
+    tapTimer = setTimeout(function () {
+      tapTimer = 0;
+      onPetTap();
+    }, 350);
+  }
+
+
+  // ============================================================
   // 待机表现（长时间无交互/无对话 → 宠物自然"活着"）
   // - 每 cfg.idle.loopMs 随机播放一个轻待机动作（低优先级，不打断主动行为）
   // - 附带随机表情微变（如困→眨眼→回归），由 setExpressionTimed 回正 lastExpression
@@ -1573,18 +1772,18 @@
     el.retry.addEventListener("click", function () { hideError(); loadModel(state.currentModel); });
 
     // 点击宠物身体 → 交互反馈（委托到 document，canvas 是 L2Dwidget 动态创建的）
-    // 排除点击到 UI 控件（输入条/气泡/面板/按钮）的情况，避免误触
+    // 排除点击到 UI 控件（输入条/气泡/面板/按钮/对话框）的情况，避免误触
     document.addEventListener("click", function (e) {
       var t = e.target;
       var isCanvas = t && (t.tagName === "CANVAS" ||
                            (t.id === "live2d-widget") ||
                            (t.id === "live2d-canvas"));
       if (!isCanvas) return;
-      var onUI = t.closest && t.closest("#l2d-inputbar, #l2d-bubble, #l2d-model-panel, .l2d-topbar, #l2d-toggle-panel");
+      var onUI = t.closest && t.closest("#l2d-inputbar, #l2d-bubble, #l2d-model-panel, .l2d-topbar, #l2d-toggle-panel, .l2d-dialog");
       if (onUI) return;   // 点到 UI 不算摸宠物
       // 拖动结束后的 click 跳过（避免拖完误触发点击反应）
       if (Date.now() - (petDragSupressClick || 0) < 300) return;
-      onPetTap();
+      onPetClick();
     });
   }
 
@@ -1865,6 +2064,10 @@
   window.Live2D.setExpressionSafe = setExpressionSafe;
   window.Live2D.setExpressionTimed = setExpressionTimed;
   window.Live2D.onPetTap = onPetTap;
+  // 双击聊天对话框后门（供外部脚本/测试驱动）
+  window.Live2D.openChat = openChatDialog;
+  window.Live2D.closeChat = closeChatDialog;
+  window.Live2D.chatDialog = function () { return state.dialogOpen; };
   window.Live2D.expressionNames = expressionNames;
   window.Live2D.idle = { start: startIdle, reset: idleReset };
   window.Live2D.lastExpression = function () { return lastExpression; };
