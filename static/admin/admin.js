@@ -15,6 +15,7 @@ document.querySelectorAll('.snav-item').forEach(tab=>{
     if(p==='model') loadModelRows();
     if(p==='mcp') loadMcp();
     if(p==='tts'){ loadTts(); loadTtsRoles(); }
+    if(p==='goals') loadGoals();
   };
 });
 
@@ -334,6 +335,93 @@ async function loadRelation(){
     box.innerHTML+=h(`<h4 style="margin-bottom:8px">📈 情绪走向</h4>
       <p>样本 ${mt.samples} · 平均效价 ${mt.valence_avg!=null?mt.valence_avg:'—'} · 趋势 ${esc(mt.trend||'平稳')}</p>`);
   }
+}
+
+// ===== 长期目标管理（增删改查） =====
+const GOAL_STATUS_TXT={active:'进行中',ongoing:'推进中',paused:'搁置',done:'已达成',abandoned:'已放弃'};
+const GOAL_STATUS_COLOR={active:'#07c160',ongoing:'#409eff',paused:'#e6a23c',done:'#909399',abandoned:'#999'};
+// 用 id 定位，避免标题含引号/特殊字符破坏 onclick
+let _goalKey='';
+
+async function loadGoals(){
+  const p=new URLSearchParams({user_id:$('goalUserId').value, role_id:$('goalRoleId').value});
+  const res=await fetch('/admin/goals?'+p); const json=await res.json();
+  const box=$('goalList');
+  if(json.code!==0){ box.innerHTML=`<p class="err">${esc(json.message||'读取失败')}</p>`; return; }
+  const goals=json.data||[]; box.innerHTML='';
+  if(!goals.length){ box.innerHTML='<p class="hint">暂无长期目标。可在对话中自然沉淀，或在上方手动添加。</p>'; return; }
+  goals.forEach(g=>{
+    const st=g.status||'active', id=g.id||'';
+    const stTxt=GOAL_STATUS_TXT[st]||st, color=GOAL_STATUS_COLOR[st]||'#07c160';
+    const vit=g.vitality!=null?(typeof g.vitality==='number'?g.vitality.toFixed(2):g.vitality):'—';
+    const k=encodeURIComponent(id);
+    box.innerHTML+=`<div style="margin-bottom:12px;padding:10px;border:1px solid #eee;border-radius:8px;background:#fafafa">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+        <span style="font-weight:600">${esc(g.title||'')}</span>
+        <span>
+          <span style="display:inline-block;padding:1px 8px;border-radius:10px;background:${color}22;color:${color};font-size:12px">${stTxt}</span>
+          <span class="hint" style="font-size:12px;margin-left:6px">鲜活度 ${vit}</span>
+        </span>
+      </div>
+      ${g.progress?`<p style="margin:6px 0 0;font-size:13px"><b>进度：</b>${esc(g.progress)}</p>`:''}
+      ${g.note?`<p style="margin:2px 0 0;font-size:13px;color:#666"><b>备注：</b>${esc(g.note)}</p>`:''}
+      <p class="hint" style="margin:4px 0 0;font-size:12px">创建 ${esc((g.created||'').slice(0,19).replace('T',' '))} · 上次提及 ${esc((g.last_engaged||'').slice(0,19).replace('T',' '))}</p>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-gray" onclick="promptGoalEdit('${k}')">编辑</button>
+        <button class="btn btn-green" onclick="setGoalStatus('${k}','done')">标记达成</button>
+        <button class="btn btn-gray" onclick="setGoalStatus('${k}','paused')">搁置</button>
+        <button class="btn btn-green" onclick="setGoalStatus('${k}','active')">恢复</button>
+        <button class="btn btn-red" onclick="if(confirm('确定删除该目标？'))deleteGoal('${k}')">删除</button>
+      </div>
+    </div>`;
+  });
+}
+
+async function addGoal(){
+  const title=$('goalNewTitle').value.trim();
+  if(!title){ toast('目标标题不能为空'); return; }
+  const body={user_id:$('goalUserId').value, role_id:$('goalRoleId').value, title,
+    progress:$('goalNewProgress').value, note:$('goalNewNote').value, status:$('goalNewStatus').value};
+  const res=await fetch('/admin/goals/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j=await res.json();
+  toast((j.code===0?'✅ ':'❌ ')+j.message);
+  if(j.code===0){ $('goalNewTitle').value=''; $('goalNewProgress').value=''; $('goalNewNote').value=''; loadGoals(); }
+}
+
+function goalByKey(key){
+  // 从当前列表 DOM 无法取原对象，直接走后端更新接口（用 key 标识）
+  return decodeURIComponent(key);
+}
+
+function promptGoalEdit(key){
+  // 从后端取当前值以便编辑（简化：重新查询该条）
+  const kw=goalByKey(key).trim();
+  const np=prompt('目标标题', kw)||''; if(np==null) return;
+  const pp=prompt('进度（文本，可空）','')||''; if(pp==null) return;
+  const nn=prompt('备注（可空）','')||''; if(nn==null) return;
+  const ns=prompt('状态（active/ongoing/paused/done）','active');
+  if(ns==null) return;
+  updateGoal(key,{title:np,progress:pp,note:nn,status:ns});
+}
+
+async function updateGoal(key, fields){
+  const body={user_id:$('goalUserId').value, role_id:$('goalRoleId').value, id:goalByKey(key), ...fields};
+  const res=await fetch('/admin/goals/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j=await res.json();
+  toast((j.code===0?'✅ ':'❌ ')+j.message);
+  if(j.code===0) loadGoals();
+}
+
+async function setGoalStatus(key, status){
+  await updateGoal(key,{status});
+}
+
+async function deleteGoal(key){
+  const body={user_id:$('goalUserId').value, role_id:$('goalRoleId').value, id:goalByKey(key)};
+  const res=await fetch('/admin/goals/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j=await res.json();
+  toast((j.code===0?'✅ ':'❌ ')+j.message);
+  if(j.code===0) loadGoals();
 }
 
 // ===== 统计 =====

@@ -248,6 +248,23 @@ LIVE2D_ENABLED = _bool(os.getenv("LIVE2D_ENABLED", "true"))
 # 角色可读写的沙箱根目录（read_file/write_file/list_files 仅限此目录及 uploads）
 ASSISTANT_WORKSPACE_DIR = str(Path(PROJECT_ROOT) / os.getenv("ASSISTANT_WORKSPACE_DIR", "assistant_workspace"))
 
+# ===================== 长期目标记忆（前瞻记忆·主动规划） =====================
+# 让角色"放在心上"地记住用户长期目标，并作为主动开口的素材。
+# 默认开但"无目标即空行为"：没有任何目标时 prompt 不注入、主动不触发，行为零回归。
+GOAL_MEMORY_ENABLED = _bool(os.getenv("GOAL_MEMORY_ENABLED", "true"))
+# 长时目标主动提的最低鲜活度：低于此 = 角色"忘得差不多了"，不再主动提（让位给别的素材）
+GOAL_MIN_VITALITY = _float(os.getenv("GOAL_MIN_VITALITY", "0.15"), 0.15)
+# 目标半衰期（天）：决定"多久不提及，角色对它的记忆淡多少"（默认 21 天，与情绪一致）
+GOAL_HALFLIFE_DAYS = _float(os.getenv("GOAL_HALFLIFE_DAYS", "21"), 21.0)
+# 主动提目标的触发间隔（秒）：同一目标至少隔多久才可能被主动提起（避免变成唠叨闹钟）
+GOAL_ACTIVE_MIN_INTERVAL_SEC = _int(os.getenv("GOAL_ACTIVE_MIN_INTERVAL_SEC"), 14400)
+# 对话自动提炼目标：总开关（默认开；关闭则不做 LLM 识别，仅保留手动/注入能力）
+GOAL_EXTRACT_ENABLED = _bool(os.getenv("GOAL_EXTRACT_ENABLED", "true"))
+# 提炼节流（秒）：两次目标提炼调用之间至少间隔多久，避免每句对话都调 LLM（省调用/防膨胀）
+GOAL_EXTRACT_INTERVAL_SEC = _int(os.getenv("GOAL_EXTRACT_INTERVAL_SEC"), 300)
+# 每次提炼时用户消息里至少几个目标性关键词才值得调 LLM（过短/无关的闲聊跳过）
+GOAL_EXTRACT_MIN_KEYWORDS = _int(os.getenv("GOAL_EXTRACT_MIN_KEYWORDS"), 1)
+
 # 角色配置
 ROLES_FILE = str(Path(PROJECT_ROOT) / "config" / "roles.json")
 ROLE_PROMPTS_DIR = str(Path(PROJECT_ROOT) / "role_prompts")
@@ -293,6 +310,13 @@ EDITABLE_KEYS = {
     "TTS_PROMPT_LANG": ("TTS 参照音频语言", "str", TTS_PROMPT_LANG),
     "TTS_MEDIA_TYPE": ("TTS 输出格式(wav/ogg/aac)", "str", TTS_MEDIA_TYPE),
     "TTS_SPEED_FACTOR": ("TTS 语速(0.5-2.0)", "float", TTS_SPEED_FACTOR),
+    "GOAL_MEMORY_ENABLED": ("长期目标记忆（前瞻记忆·主动规划）", "bool", GOAL_MEMORY_ENABLED),
+    "GOAL_MIN_VITALITY": ("目标主动提的最低鲜活度", "float", GOAL_MIN_VITALITY),
+    "GOAL_HALFLIFE_DAYS": ("目标记忆半衰期(天)", "float", GOAL_HALFLIFE_DAYS),
+    "GOAL_ACTIVE_MIN_INTERVAL_SEC": ("目标主动提触发间隔(秒)", "int", GOAL_ACTIVE_MIN_INTERVAL_SEC),
+    "GOAL_EXTRACT_ENABLED": ("对话自动提炼目标（LLM 识别）", "bool", GOAL_EXTRACT_ENABLED),
+    "GOAL_EXTRACT_INTERVAL_SEC": ("目标提炼节流间隔(秒)", "int", GOAL_EXTRACT_INTERVAL_SEC),
+    "GOAL_EXTRACT_MIN_KEYWORDS": ("目标提炼最小关键词数", "int", GOAL_EXTRACT_MIN_KEYWORDS),
 }
 
 # 需保留在 EDITABLE_KEYS 中以支持 update_config 持久化，但**不出现在「配置管理」页**的项。

@@ -31,20 +31,26 @@
 
 import threading
 import time
+from typing import Optional
 
 from core.config import (
     PROACTIVITY_ENABLED,
     PROACTIVITY_MIN_INTERVAL_MIN,
     PROACTIVITY_DAILY_CAP,
     PROACTIVITY_SCAN_INTERVAL,
+    GOAL_MEMORY_ENABLED,
+    GOAL_MIN_VITALITY,
+    GOAL_ACTIVE_MIN_INTERVAL_SEC,
 )
 
 
 class ProactiveDecider:
     """平衡多信号，决定此刻是否值得主动开口、优先说什么。"""
 
-    # 素材优先级（0 最高）：承诺 > 进行中经历 > 情绪关怀 > 感知变化 > 断联回归
+    # 素材优先级（0 最高）：长期目标 > 承诺 > 进行中经历 > 情绪关怀 > 感知变化 > 断联回归
+    # 长期目标最具"信息量与主动性"（有信息量的关心，而非空泛问候），故排最前。
     _PRIORITY = {
+        "goal": -1,
         "promise": 0,
         "episode": 1,
         "mood": 2,
@@ -56,6 +62,7 @@ class ProactiveDecider:
         """relation: RelationMemory（可空）；perception: PerceptionManager（可空）。"""
         self.relation = relation
         self.perception = perception
+        self._goal_throttle: dict = {}   # user_id -> last_ts，目标的主动态节流
         # 节流状态：user_id -> {"last": ts, "today": date_str, "count": int}
         self._throttle = {}
 
@@ -68,6 +75,88 @@ class ProactiveDecider:
             return self.relation.pending_promises(user_id, n=3) or []
         except Exception:
             return []
+
+    def _signal_goal(self, user_id: str) -> Optional[dict]:
+        """长期目标信号：角色"放在心上"的用户目标（有信息量的主动关心）。
+
+        只有同时满足才开口（克制、不伪造、读不到即空）：
+        - GOAL_MEMORY_ENABLED 开启；
+        - relation 里确有鲜活目标（vitality >= GOAL_MIN_VITALITY）且非完成/放弃；
+        - 距上次主动提该用户目标超过 GOAL_ACTIVE_MIN_INTERVAL_SEC（防唠叨）；
+        - **择时/情绪校准**：时机不合适（深夜且对方平时已睡）或对方情绪低落时，
+          让位给关怀/其他信号（返回 None），不无差别硬提目标。
+        返回素材 dict 或 None。
+        """
+        if not GOAL_MEMORY_ENABLED:
+            return None
+        try:
+            if self.relation is None:
+                return None
+            # ③ 择时/情绪校准：时机或情绪不合适时，不提目标，让位给更合时宜的信号
+            if self._goal_timing_inappropriate(user_id):
+                return None
+            goals = self.relation.live_goals(
+                user_id, n=3, min_vitality=GOAL_MIN_VITALITY
+            )
+            if not goals:
+                return None
+            now = time.time()
+            # 目标级节流：取最新一个可提目标，且距上次提及够久
+            goal = goals[0]
+            last = self._goal_throttle.get(user_id, 0)
+            if GOAL_ACTIVE_MIN_INTERVAL_SEC > 0 and now - last < GOAL_ACTIVE_MIN_INTERVAL_SEC:
+                return None
+            title = str(goal.get("title", "")).strip()
+            if not title:
+                return None
+            self._goal_throttle[user_id] = now
+            # ② 有信息量的关心：把进度 + 提炼时给的"下一步建议(note)"都带进 context，
+            #    让 LLM 不只是看到"目标名+进度"，还能看到具体的下一步，开口更有信息量。
+            progress = str(goal.get("progress", "")).strip()
+            note = str(goal.get("note", "")).strip()
+            ctx = f"你有一个在推进的目标「{title}」"
+            if progress:
+                ctx += f"（进度：{progress[:40]}）"
+            if note:
+                ctx += f"；你记得的下一步：{note[:40]}"
+            return {
+                "type": "goal",
+                "trigger": "想到你有一个还在坚持的目标",
+                "context": ctx,
+            }
+        except Exception:
+            return None
+
+    def _goal_timing_inappropriate(self, user_id: str) -> bool:
+        """③ 择时/情绪校准：判断此刻是否不适合提目标。
+
+        返回 True（不适合）的情形：
+        - 用户情绪明显低落/在变差（此时提目标很扫兴，应让位给情绪关怀）；
+        - 深夜/清晨且该用户平时这个点通常已安静（不该为催目标打扰）。
+        读不到一律返回 False（不误拦 → 保持原行为）。
+        """
+        try:
+            # 情绪低落：与 _signal_mood 同源，低落时不硬提目标
+            if self.relation is not None:
+                mood = self.relation._mood_trend_text(user_id) or ""
+                if "变差" in mood or "下降" in mood:
+                    return True
+        except Exception:
+            pass
+        try:
+            # 深夜/清晨且平时安静：不去打扰
+            from core.perception import time_situation
+            if self.perception is not None and hasattr(self.perception, "routine"):
+                t = time_situation()
+                if t.get("period") in ("深夜", "清晨"):
+                    quiet = self.perception.routine.quiet_hours(user_id)
+                    if quiet and t.get("now") and len(str(t.get("now"))) >= 13:
+                        hour = int(str(t["now"])[11:13])
+                        if hour in quiet:
+                            return True
+        except Exception:
+            pass
+        return False
 
     def _signal_episodes(self, user_id: str) -> list:
         """进行中/鲜活话题：取最近有共鸣的经历（排除过短的无奈话术）。"""
@@ -154,6 +243,10 @@ class ProactiveDecider:
             return {"should_act": False, "trigger": "", "context": "", "type": ""}
         candidates = []
         # 收集素材（按优先级）
+        # 长期目标：角色"放在心上"的用户目标，最有信息量、最主动（最高优先级）
+        goal = self._signal_goal(user_id)
+        if goal:
+            candidates.append(goal)
         promises = self._signal_promises(user_id)
         if promises:
             text = str(promises[0].get("text", "")).strip()

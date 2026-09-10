@@ -769,6 +769,15 @@ class LangGraphMemoryAgent:
                 pass
             # 关系记忆内核：沉淀共同经历 + 周期反思（底层内在状态层，异步不阻塞回复）
             self._relation_after_reply(user_id, user_msg, reply, session)
+            # 长期目标：对话自动提炼"用户正在追求的目标"并写入 relation.goals 账本。
+            # 关键词闸门 + 节流 + LLM 判断，失败一律静默（在后台线程，不阻塞回复）。
+            try:
+                from core.goal_extractor import extract_and_update
+                extract_and_update(
+                    user_id, self.role_id, user_msg, self.tool_adapter,
+                )
+            except Exception:
+                pass
             # 承诺兑现闭环：用户表达"谢谢/记得/办到了"等确认时，把相关承诺标记为已兑现
             try:
                 rel_c2 = self._get_relation()

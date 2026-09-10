@@ -21,6 +21,7 @@
 """
 import json
 import math
+import re
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -125,6 +126,10 @@ class RelationMemory:
             u.setdefault("decay", {"emotion": {}, "affection": {}, "last_active": ""})
             # 承诺追踪：用户托付/角色答应的事（人格一致性：记得并兑现）
             u.setdefault("promises", [])   # [{text, ts, status: pending|kept|dropped, topic}]
+            # 长期目标（前瞻记忆）：角色"放在心上"的、关于用户的目标/正在做的事。
+            # 每条 {title, progress(自然文本), vitality, last_engaged, note, status, created, completed_at}
+            # 生老病死（淡忘/放下/想不起）由 vitality 随半衰期自然衰减承载，不用状态机。
+            u.setdefault("goals", [])
             # 轻量情绪走向：从若干经历直接推导（零额外 LLM 调用，见 _mood_trend_text）
             u.setdefault("mood_trend", {"samples": 0, "valence_avg": 0.0, "trend": "平稳"})
             return u
@@ -408,6 +413,160 @@ class RelationMemory:
             self._save()
         return kept
 
+    # ===================== 4. 长期目标账本（前瞻记忆） =====================
+
+    def add_goal(
+        self,
+        user_id: str,
+        title: str,
+        progress: str = "",
+        note: str = "",
+        status: str = "active",
+    ) -> Dict:
+        """记住一个用户正在做的长期目标（放在心上，不是建状态机）。
+
+        同一标题已存在 → 在原目标上更新 progress/note 并回热 vitality（去重，不重复记）。
+        status: active(进行中) / ongoing(推进中) / paused(搁置) / done(已达成)。
+        """
+        title = (title or "").strip()
+        if not title:
+            title = "未命名目标"
+        u = self._user(user_id)
+        goals = u["goals"]
+        with self._lock:
+            for g in goals:
+                if self._goal_title_eq(g.get("title", ""), title):
+                    if progress:
+                        g["progress"] = progress
+                    if note:
+                        g["note"] = note
+                    g["status"] = status
+                    g["vitality"] = 1.0
+                    g["last_engaged"] = _now_iso()
+                    self._save()
+                    return g
+            goal = {
+                "id": "g_" + str(int(datetime.now().timestamp() * 1000)),
+                "title": title,
+                "progress": progress,
+                "note": note,
+                "status": status,
+                "vitality": 1.0,
+                "created": _now_iso(),
+                "last_engaged": _now_iso(),
+                "completed_at": "",
+            }
+            goals.append(goal)
+            self._save()
+            return goal
+
+    def update_goal(self, user_id: str, goal_id_or_title: str, **fields) -> bool:
+        """按 id 或标题更新目标字段（progress/note/status），并回热 vitality。"""
+        u = self._user(user_id)
+        with self._lock:
+            for g in u["goals"]:
+                if g.get("id") == goal_id_or_title or self._goal_title_eq(
+                        g.get("title", ""), goal_id_or_title):
+                    for k, v in fields.items():
+                        g[k] = v
+                    g["last_engaged"] = _now_iso()
+                    g["vitality"] = 1.0
+                    # 状态进入终态（done/abandoned）时补时间戳
+                    if k == "status" and v in ("done", "abandoned") and not g.get("completed_at"):
+                        g["completed_at"] = _now_iso()
+                    self._save()
+                    return True
+            return False
+
+    def delete_goal(self, user_id: str, goal_id_or_title: str) -> bool:
+        """删除目标（后台管理用；对话内不主动删）。"""
+        u = self._user(user_id)
+        with self._lock:
+            before = len(u["goals"])
+            u["goals"] = [g for g in u["goals"]
+                          if g.get("id") != goal_id_or_title
+                          and not self._goal_title_eq(g.get("title", ""), goal_id_or_title)]
+            if len(u["goals"]) != before:
+                self._save()
+                return True
+            return False
+
+    def touch_goal(self, user_id: str, goal_id_or_title: str) -> bool:
+        """触碰目标（用户又提起），回热 vitality + 更新时间。"""
+        return self.update_goal(user_id, goal_id_or_title)
+
+    def goals(self, user_id: str) -> List[Dict]:
+        """返回该用户全部长期目标（按更新时间倒序）。"""
+        g = list(self._user(user_id)["goals"])
+        g.sort(key=lambda x: x.get("last_engaged", ""), reverse=True)
+        for item in g:
+            item["vitality"] = round(self._goal_vitality(item), 3)
+        return g
+
+    def _goal_vitality(self, g: Dict) -> float:
+        """目标鲜活度：随时间按半衰期自然淡忘（拟人化，非状态机归档）。"""
+        return half_life_decay(
+            float(g.get("vitality", 1.0)),
+            _days_since(g.get("last_engaged", "")),
+            self._halflife,
+        )
+
+    def live_goals(self, user_id: str, n: int = 3, min_vitality: float = 0.15,
+                   include_status=None) -> List[Dict]:
+        """此刻"角色还记得的"目标：按鲜活度排，低于阈值=忘得差不多了，自然淡出。
+
+        include_status: 过滤状态（None=不过滤）；默认不包含 done/abandoned 终态。
+        """
+        u = self._user(user_id)
+        out = []
+        for g in reversed(u["goals"]):
+            st = g.get("status", "active")
+            if include_status is None and st in ("done", "abandoned"):
+                continue
+            if include_status is not None and st not in include_status:
+                continue
+            v = self._goal_vitality(g)
+            if v < min_vitality:
+                continue
+            d = dict(g)
+            d["vitality"] = round(v, 3)
+            out.append(d)
+            if len(out) >= n:
+                break
+        return out
+
+    @staticmethod
+    def _goal_title_eq(a: str, b: str) -> bool:
+        """目标标题宽松判同（后台/提炼去重用）。
+
+        太宽松会把"学会日语/学会英语"误判为同一条；因此判同标准：
+        - 去空白/小写后完全相等，或一方完全包含另一方（短串是长串子串）；
+        - 或共享 ≥2 个 2-gram（只有 1 个公共 2 字如"学会/目标"不足为凭）。
+        """
+        def _norm(s: str) -> str:
+            return re.sub(r"\s+", "", (s or "")).lower()
+        a, b = _norm(a), _norm(b)
+        if not a or not b:
+            return False
+        if a == b or a in b or b in a:
+            return True
+
+        def grams(s: str) -> set:
+            out = set()
+            for run in re.findall(r"[a-z0-9]+", s):
+                out.add(run)
+            for run in re.findall(r"[\u4e00-\u9fa5]+", s):
+                if len(run) < 2:
+                    out.add(run)
+                else:
+                    for i in range(len(run) - 1):
+                        out.add(run[i:i + 2])
+            return out
+        ga, gb = grams(a), grams(b)
+        if not ga or not gb:
+            return False
+        return len(ga & gb) >= 2
+
     @staticmethod
     def _text_overlap(a: str, b: str, min_len: int = 2) -> bool:
         """轻量相关：两段中文字符串是否有重叠的 2-gram（滑动二元组），判断承诺是否被提及。
@@ -573,6 +732,17 @@ class RelationMemory:
             parts.append("【你答应过/该记得的事】")
             for p in promises:
                 parts.append("- " + str(p.get("text", ""))[:60])
+        # 长期目标：角色"放在心上"的用户目标（按鲜活度，忘得差不多了自然不注入）
+        live_goals = self.live_goals(user_id, n=3, min_vitality=0.15)
+        if live_goals:
+            parts.append("【用户放在心上、你也在意的目标】")
+            for g in live_goals:
+                _g = ("（" + str(g.get("progress", "")) + "）") if g.get("progress") else ""
+                _n = str(g.get("note", "")).strip()
+                _line = "- " + str(g.get("title", ""))[:40] + _g
+                if _n:
+                    _line += " · 你记得的下一步：" + _n[:40]
+                parts.append(_line)
         # 共同经历：按相关话题挑选（query 非空时），最多 3 条、压缩到 ~30 字
         if query and query.strip():
             eps = self.relevant_episodes(user_id, query, n=3, min_vitality=0.1)

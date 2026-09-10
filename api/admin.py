@@ -229,6 +229,87 @@ def setup_admin(app):
             log_error("admin.relation", e)
             return {"code": -1, "message": f"读取关系记忆失败：{e}", "data": {}}
 
+    # ===================== 长期目标管理（增删改查） =====================
+
+    def _goal_rel(role_id: str):
+        """取目标对应的 RelationMemory 实例（长期目标挂在角色的关系记忆内核下）。"""
+        from core.relation_memory import get_relation_memory
+        rid = role_id or (app.role_manager.get_default_role() or "kasumi")
+        return get_relation_memory(rid)
+
+    @router.get("/goals")
+    async def list_goals(user_id: str = "default_user", role_id: str = ""):
+        """列出该角色对该用户记住的长期目标（含自然衰减后的鲜活度）。"""
+        try:
+            rel = _goal_rel(role_id)
+            goals = rel.goals(user_id)
+            return {"code": 0, "data": goals}
+        except Exception as e:
+            log_error("admin.goals.list", e)
+            return {"code": -1, "message": f"读取目标失败：{e}", "data": []}
+
+    @router.post("/goals/add")
+    async def add_goal(request: Request):
+        """新增长期目标。body: {user_id?, role_id?, title, progress?, note?, status?}"""
+        try:
+            body = await request.json()
+            user_id = body.get("user_id") or "default_user"
+            rel = _goal_rel(body.get("role_id", ""))
+            title = (body.get("title") or "").strip()
+            if not title:
+                return {"code": -1, "message": "title 不能为空"}
+            g = rel.add_goal(
+                user_id,
+                title=title,
+                progress=body.get("progress") or "",
+                note=body.get("note") or "",
+                status=body.get("status") or "active",
+            )
+            return {"code": 0, "data": g, "message": "已添加目标"}
+        except Exception as e:
+            log_error("admin.goals.add", e)
+            return {"code": -1, "message": f"添加目标失败：{e}"}
+
+    @router.post("/goals/update")
+    async def update_goal(request: Request):
+        """更新目标。body: {user_id?, role_id?, id|title, progress?, note?, status?}"""
+        try:
+            body = await request.json()
+            user_id = body.get("user_id") or "default_user"
+            rel = _goal_rel(body.get("role_id", ""))
+            key = body.get("id") or body.get("title") or ""
+            if not key:
+                return {"code": -1, "message": "缺少目标 id 或 title"}
+            fields = {}
+            for f in ("progress", "note", "status", "title"):
+                if f in body and body.get(f) is not None:
+                    fields[f] = body[f]
+            if not fields:
+                return {"code": -1, "message": "没有要更新的字段"}
+            ok = rel.update_goal(user_id, key, **fields)
+            return {"code": 0 if ok else -1,
+                    "message": "已更新" if ok else "目标不存在"}
+        except Exception as e:
+            log_error("admin.goals.update", e)
+            return {"code": -1, "message": f"更新目标失败：{e}"}
+
+    @router.post("/goals/delete")
+    async def delete_goal(request: Request):
+        """删除目标。body: {user_id?, role_id?, id|title}"""
+        try:
+            body = await request.json()
+            user_id = body.get("user_id") or "default_user"
+            rel = _goal_rel(body.get("role_id", ""))
+            key = body.get("id") or body.get("title") or ""
+            if not key:
+                return {"code": -1, "message": "缺少目标 id 或 title"}
+            ok = rel.delete_goal(user_id, key)
+            return {"code": 0 if ok else -1,
+                    "message": "已删除" if ok else "目标不存在"}
+        except Exception as e:
+            log_error("admin.goals.delete", e)
+            return {"code": -1, "message": f"删除目标失败：{e}"}
+
     # ===================== 系统统计 =====================
 
     @router.get("/stats")

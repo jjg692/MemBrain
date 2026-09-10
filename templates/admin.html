@@ -75,6 +75,7 @@
     <div class="snav-item" data-panel="memory">🗂️ 记忆查看</div>
     <div class="snav-item" data-panel="emotion">💗 情感 / 好感度</div>
     <div class="snav-item" data-panel="relation">🔗 关系记忆</div>
+    <div class="snav-item" data-panel="goals">🎯 长期目标</div>
     <div class="snav-sep"></div>
     <div class="snav-item" data-panel="stats">📊 系统统计</div>
     <div class="snav-item" data-panel="llm">🤖 LLM 管理</div>
@@ -176,6 +177,40 @@
         <div style="flex:0 0 auto; display:flex; align-items:flex-end"><button class="btn btn-blue" onclick="loadRelation()">查询</button></div>
       </div>
       <div id="relationResult"><p class="hint">点击「查询」查看关系记忆（自我模型 / 共同经历 / 反思 / 承诺 / 情绪衰减）。</p></div>
+    </div>
+  </div>
+
+  <!-- ===== 长期目标管理 ===== -->
+  <div class="panel" id="panel-goals">
+    <div class="card">
+      <h3>🎯 长期目标管理</h3>
+      <p class="hint" style="margin-bottom:12px">长期目标是角色「放在心上」的、关于用户的目标/正在做的事。角色会随记忆自然淡忘（鲜活度），并在合适的时机主动提起。这里可手动增删改查。</p>
+      <div class="form-row">
+        <div><label>user_id</label><input id="goalUserId" value="default_user"></div>
+        <div><label>role_id</label><input id="goalRoleId" value="kasumi"></div>
+        <div style="flex:0 0 auto; display:flex; align-items:flex-end"><button class="btn btn-blue" onclick="loadGoals()">查询</button></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>新建目标</h3>
+      <div class="form-row">
+        <div><label>目标标题 *</label><input id="goalNewTitle" placeholder="如 学会 N2 日语"></div>
+        <div><label>进度（文本）</label><input id="goalNewProgress" placeholder="如 背到第 8 课"></div>
+        <div><label>备注</label><input id="goalNewNote" placeholder="如 他最近有点忙"></div>
+        <div><label>状态</label>
+          <select id="goalNewStatus">
+            <option value="active">进行中</option>
+            <option value="ongoing">推进中</option>
+            <option value="paused">搁置</option>
+            <option value="done">已达成</option>
+          </select>
+        </div>
+        <div style="flex:0 0 auto; display:flex; align-items:flex-end"><button class="btn btn-green" onclick="addGoal()">添加目标</button></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>目标列表</h3>
+      <div id="goalList"><p class="hint">点击「查询」查看该角色对这个用户记住的长期目标。</p></div>
     </div>
   </div>
 

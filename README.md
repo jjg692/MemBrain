@@ -18,6 +18,7 @@
 | 🛠️ | 工具调用 | 联网搜索、PC 控制、提醒/时间、文件沙箱、环境感知工具组 |
 | 💗 | 情感 / 好感度 | 模式 B 两阶段；6 维好感度持久化，驱动**关系阶段**（陌生→熟悉→亲密→挚友） |
 | 🧬 | 关系记忆内核 | 自我模型 / 共同经历账本 / 情绪随时间衰减 / 周期反思 |
+| 🎯 | 长期目标记忆 | 前瞻记忆：记住用户跨周/月的目标与进度（鲜活度随记忆自然淡忘），对话自动提炼，主动有信息量地关心 |
 | 🕒 | 感知层 | 时序 / 系统 / 位置 / 作息 / 情绪趋势；可选浏览器标签页 + 本地视觉 |
 | 🏃 | M2 任务循环 | plan → act → observe 长程自主，多步任务（简单对话不回归） |
 | ⏰ | 日程提醒 | 到点主动开口 + WebSocket 推送，离线保留、上线补推 |
@@ -57,12 +58,12 @@ MemBrain 按"拟人化主体的处理链路"拆成**七层 + 一个横切支撑�
 | 层 | 职责 | 关键代码 |
 |---|---|---|
 | ① 感知 | 看到世界、意识到当下（时序/系统/位置/作息/情绪趋势） | `core/perception.py`、`core/sensing.py`、`core/vision.py` |
-| ② 记忆 | 五层记忆 + 关系记忆内核（共同经历/自我模型/衰减） | `core/memory/`、`core/relation_memory.py` |
+| ② 记忆 | 五层记忆 + 关系记忆内核（共同经历/自我模型/衰减）+ 长期目标（前瞻） | `core/memory/`、`core/relation_memory.py`、`core/goal_extractor.py` |
 | ③ 思维 | LangGraph 自治 Agent：`agent→tools→observe→agent` | `agent/graph.py` |
-| ④ 情感/关系 | 情感 + 6 维好感度 + 关系阶段（陌生→挚友） | `core/emotion/`、`core/relation_memory.py` |
+| ④ 情感/关系 | 情感 + 6 维好感度 + 关系阶段（陌生→挚友）+ 长期目标追迹（放在心上） | `core/emotion/`、`core/relation_memory.py` |
 | ⑤ 行为 | 工具执行（搜索/PC/提醒/文件沙箱/感知） | `core/tools.py`、`core/assistant_tools.py` |
 | ⑥ 表达 | 台词 + 行为事件（表情/口型/动作）+ 择时 | `core/behavior.py`、`core/sensing_hint.py` |
-| ⑦ 主动 | 低频、克制的主动开口（断联想念/记得承诺/关心情绪） | `core/proactivity.py` |
+| ⑦ 主动 | 低频、克制的主动开口（目标推进/断联想念/记得承诺/关心情绪，带择时校准） | `core/proactivity.py` |
 | 横切 | 配置（`.env`）、LLM 适配、状态、WebSocket 推送 | `core/config.py`、`core/adapters.py`、`api/` |
 
 **五层记忆**：
@@ -242,7 +243,7 @@ asyncio.run(main())
 
 ### 后台（`/admin/*`）
 
-联系人 CRUD、Prompt 读写、头像上传、记忆 / 情感 / 统计查看、配置修改、Live2D 模型配置。
+联系人 CRUD、Prompt 读写、头像上传、记忆 / 情感 / 统计查看、**长期目标管理（增删改查）**、配置修改、Live2D 模型配置。
 后台可编辑的配置项（开关、阈值等）见 `core/config.py` 的 `EDITABLE_KEYS`。
 
 ---
@@ -277,7 +278,8 @@ agent-web-refactor/
 │   ├── sensing.py                # 环境感知工具（标签页/前台/摘要）
 │   ├── sensing_hint.py           # 感知→表达触发
 │   ├── vision.py                 # 本地视觉（Ollama 多模态 → 文本）
-│   ├── relation_memory.py        # 关系记忆内核（自我模型/共同经历/衰减/反思）
+│   ├── relation_memory.py        # 关系记忆内核（自我模型/共同经历/衰减/反思）/ 长期目标账本
+│   ├── goal_extractor.py         # 目标提炼器（对话自动发现用户长期目标写入 goals 账本）
 │   ├── reminder.py               # 日程/提醒引擎
 │   ├── proactivity.py            # 主动性决策（低频主动开口）
 │   ├── behavior.py               # 行为映射（表情/口型/动作）
@@ -337,6 +339,7 @@ python -m pytest test -q
 | `VISION_ENABLED` / `VISION_MODEL` | 本地视觉开关 / 视觉模型 | `false` / `qwen2.5-vl:7b` |
 | `PROACTIVITY_ENABLED` / `PROACTIVITY_*` | 主动性心跳开关 / 最小间隔 / 日封顶 | `false` / `30` / `8` |
 | `RELATION_MEMORY_*` | 关系记忆内核（半衰期/共振阈值/反思） | 见 `.env.example` |
+| `GOAL_*` | 长期目标记忆（总开关/鲜活度阈值/半衰期/主动提间隔/自动提炼开关与节流） | 见 `.env.example`（默认开，无目标零回归） |
 | `REMINDER_SCAN_INTERVAL` / `REMINDER_FILE` | 提醒调度 / 文件 | `15` / `reminders.json` |
 | `TTS_ENABLED` / `TTS_*` | TTS 语音合成（GPT-SoVITS） | 见 `.env.example`（默认全关） |
 | `LIVE2D_ENABLED` / `LIVE2D_*` | Live2D 开关 / 模型根目录 / 渲染器 | `true` / `live2d` / `l2dwidget` |
