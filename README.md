@@ -124,32 +124,49 @@ TOOL_LLM_MODEL=qwen2.5:7b   # 工具/抽取/情感模型
 
 ### 启动
 
+> 本项目是**后端服务 + 服务端渲染网页一体**的（FastAPI + 原生 JS 模板），
+> **一个命令同时启动 Web 端（后端服务）与网页端（浏览器界面）**，无需另起前端工程。
+
 ```bash
 python web_app.py
 ```
 
-浏览器自动打开 `http://localhost:8000`：
+启动后浏览器会自动打开 `http://localhost:8000`；若未弹窗，请**手动在浏览器访问网页端**：
 
-| 路径 | 说明 |
+| 网页端路径 | 说明 |
 |---|---|
-| `/` | 聊天界面 |
-| `/admin` | 后台管理 |
-| `/health` | 健康检查 |
+| `http://localhost:8000/` | 聊天界面（选择角色开始对话） |
+| `http://localhost:8000/admin` | 后台管理（联系人/记忆/情感/长期目标/统计/配置/MCP） |
+| `http://localhost:8000/live2d?petmode=1` | Live2D 透明宠物页（网页端形态） |
+| `http://localhost:8000/live2d-chat` | Live2D 双窗口独立对话页 |
+| `http://localhost:8000/health` | 健康检查 |
 
-> 不想自动弹浏览器：`MEMBRAIN_NO_BROWSER=1 python web_app.py`
+> 设置说明：
+> - 监听地址 / 端口在 `.env` 的 `HOST` / `PORT`（默认 `0.0.0.0:8000`），改端口后 `http://localhost:<PORT>` 同步变化。
+> - 不想自动弹浏览器：`MEMBRAIN_NO_BROWSER=1 python web_app.py`（桌面宠物壳会自动设此变量，避免重复弹窗）。
+> - 桌面前端（可选）：`python desktop_pet.py`（pywebview 壳）或 `python desktop_pet_qt.py --pet`（Qt 悬浮宠物），见下文「🖥️ 桌面宠物」。
 
 ---
 
 ## 🖥️ 桌面宠物
 
-浏览器版之外，提供两种桌面形态：
+浏览器版之外，提供两种**桌面端**形态。两者都会在需要时自动拉起后端（等价 `python web_app.py`），无需先手动启动后端：
 
-| 形态 | 命令 | 说明 |
+| 形态 | 启动命令 | 说明 |
 |---|---|---|
-| M1 壳（pywebview） | `python desktop_pet.py` | 无边框置顶聊天窗 + 系统托盘，自动拉起后端 |
+| M1 壳（pywebview） | `python desktop_pet.py` | 窗口模式：Live2D 立绘页（默认），无边框置顶 + 系统托盘，自动拉起后端 |
+| M1 壳 · 透明悬浮 | `python desktop_pet.py --pet` | 透明小窗只包住模型、整窗=模型大小，可满屏拖动（`--transparent` 为兼容写法） |
+| M1 壳 · 双窗口 | `python desktop_pet.py --twin` | 透明模型窗 + 独立对话窗 |
+| M1 壳 · 聊天页 | `python desktop_pet.py --chat` | 聊天页（旧行为） |
 | Qt 版（透明悬浮） | `python desktop_pet_qt.py --pet` | 透明置顶悬浮 Live2D 宠物（需系统 Python 3.11 含 PySide6） |
+| Qt 版 · 大窗聊天 | `python desktop_pet_qt.py --window` | 不透明大窗加载完整聊天页（chat.html 全部功能），可全屏 |
+| Qt 版 · 双窗口 | `python desktop_pet_qt.py --twin` | 透明模型窗 + 独立对话窗 |
 
-更多模式：`desktop_pet_qt.py --window`（大窗聊天）/ `--twin`（双窗口）/ `--backend-only`（仅后端）。
+调试/进阶：
+- `python desktop_pet.py --backend-only` / `python desktop_pet_qt.py --backend-only`：只启动后端、不弹窗口。
+- 窗口模式由参数临时指定，也可用环境变量持久化：`desktop_pet.py` 支持 `PET_MODE`（`window` / `floating` / `twin`）、`PET_PAGE`（`live2d` / `chat`）、`PET_TRANSPARENT=1`。
+- 桌面壳启动时会设置 `MEMBRAIN_NO_BROWSER=1`（已有独立窗口，不再弹浏览器）。
+
 Live2D 模型、角色与渲染契约见 `docs/dual-window-contract.md`。
 
 ---

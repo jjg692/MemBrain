@@ -145,19 +145,25 @@ def test_ws_sender_plus_watcher(monkeypatch):
     assert watcher.sent[-1]["type"] == "reply"
 
 
-def test_ws_duplicate_sender_replaces_old(monkeypatch):
-    """重复 sender 时旧 sender 被关闭替换。"""
+def test_ws_duplicate_sender_coexist_and_broadcast(monkeypatch):
+    """多个 sender 共存（主聊天窗 + 双击对话框）：不互踢，广播给所有 sender。"""
     m = _new_manager()
 
     async def run():
-        old = FakeWS(); new = FakeWS()
-        await m.connect("u1", old, is_sender=True)
-        await m.connect("u1", new, is_sender=True)
-        return old, new, m.get_sender("u1")
+        s1 = FakeWS(); s2 = FakeWS()
+        await m.connect("u1", s1, is_sender=True)
+        await m.connect("u1", s2, is_sender=True)
+        both_senders = [c.is_sender for c in m._connections["u1"]]
+        ok = await m.broadcast_to_user("u1", {"type": "reply", "content": "hi"})
+        return s1, s2, both_senders, ok
 
-    old, new, current = asyncio.run(run())
-    assert old.closed is True
-    assert current is new
+    s1, s2, both_senders, ok = asyncio.run(run())
+    assert s1.closed is False          # 旧 sender 不被关闭
+    assert s2.closed is False          # 新 sender 正常
+    assert both_senders.count(True) == 2   # 两个 sender 都在
+    assert ok is True
+    assert s1.sent[-1]["type"] == "reply"  # 广播到 s1
+    assert s2.sent[-1]["type"] == "reply"  # 广播到 s2
 
 
 def test_ws_disconnect_and_watcher_survives(monkeypatch):

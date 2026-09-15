@@ -31,16 +31,10 @@ class SingleConnectionManager:
     async def connect(self, user_id: str, ws: WebSocket, is_sender: bool = True):
         await ws.accept()
         conns = self._connections.setdefault(user_id, [])
-        # 若重复 sender，关掉旧的 sender（一个窗口为主）
-        if is_sender:
-            for old in conns:
-                if old.is_sender:
-                    try:
-                        await old.ws.close()
-                    except Exception:
-                        pass
-                    break
-            conns[:] = [c for c in conns if not c.is_sender]
+        # 允许多个 sender 共存（如：主聊天窗 + 双击角色弹出的对话框）。
+        # 每个 sender 发消息都会触发回复，回复通过 broadcast_to_user 广播给
+        # 该 user 的**所有**连接（多个 sender + watcher），从而多窗内容完全同步，
+        # 而不是让新 sender 顶掉旧的（旧行为会导致双击对话框与聊天窗互相挤断、不同步）。
         conns.append(_PrivateConn(ws, is_sender))
 
     def disconnect(self, user_id: str, ws: WebSocket = None):
@@ -70,7 +64,11 @@ class SingleConnectionManager:
         return True
 
     def get_sender(self, user_id: str) -> WebSocket | None:
-        """返回该 user 的 sender 连接（用于反向单发）"""
+        """返回该 user 的某个 sender 连接（用于反向单发）。
+
+        允许多个 sender 共存后，此方法返回第一个 sender（弱路由）。
+        业务侧广播一律用 broadcast_to_user（发给所有连接）；仅测试/特定场景用此方法。
+        """
         for c in self._connections.get(user_id, []):
             if c.is_sender:
                 return c.ws
