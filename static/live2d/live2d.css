@@ -152,8 +152,12 @@ body.petmode .l2d-status { top: 20%; }
   max-width: 78%;
   min-width: 140px;
   pointer-events: auto;
+  opacity: 1;
+  transition: opacity var(--l2d-bubble-fade, 400ms) ease;
 }
 .l2d-bubble.hidden { display: none; }
+/* 气泡淡出态：由 JS showBubble 的自动消失策略添加；opacity 过渡结束后再置 hidden */
+.l2d-bubble.fading { opacity: 0; }
 .l2d-bubble-text {
   position: relative;
   background: rgba(22,22,30,.92);

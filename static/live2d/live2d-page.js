@@ -113,6 +113,18 @@
       moodSmile: 0.22,    // 微变中"微笑"占比
       exprMs: 1800,       // 临时表情持续(ms)
     },
+    bubble: {
+      // —— 气泡自动消失策略 ——
+      // 宠物说完一句话后不一直挂在屏幕上，而是"像活物"一样自然淡出。
+      autoHide: true,      // 是否自动隐藏（总开关；false 则气泡常驻，直到下一条覆盖）
+      perCharMs: 120,      // 每个字增加的展示时长(ms)：长回复展示更久
+      minMs: 3000,         // 最短展示时长(ms)：短句也不一闪而过
+      maxMs: 15000,        // 最长展示时长(ms)：再长的回复也不无限占用屏幕
+      fadeMs: 400,         // 淡出过渡时长(ms)（与 CSS transition 对应）
+      cancelOnTap: true,   // 点击宠物身体时取消自动隐藏（用户想慢慢读）
+      cancelOnHover: true, // 鼠标悬停在气泡上时暂缓消失（读一半被打断会缓一下）
+      hoverDelayMs: 1500,  // 悬停取消后，离开气泡时再延迟多久才恢复隐藏计时
+    },
   };
 
   // URL 参数扁平覆盖表：pet_<key> -> PET_CFG[section][field]
@@ -491,7 +503,12 @@
   function setPending(on) {
     state.pending = on;
     el.bubble.classList.toggle("typing", on);
-    if (on) { el.bubbleText.textContent = "……"; el.bubble.classList.remove("hidden"); }
+    if (on) {
+      // 打字中：提示符不参与自动消失（否则动画常驻或消失时机混乱）
+      cancelBubbleHide();
+      el.bubbleText.textContent = "……";
+      el.bubble.classList.remove("hidden");
+    }
   }
 
   // 气泡文本清洗（petmode 专用，空间紧张时使用）：
@@ -547,9 +564,90 @@
   }
 
   function showBubble(text, kind) {
+    var bc = PET_CFG.bubble || {};
+    // 新消息到来：重置上一次的隐藏定时器/淡出态（连续说话不被打断成"一闪而过"）
+    cancelBubbleHide();
+    // 移除可能残留的淡出态
+    el.bubble.classList.remove("fading");
     renderBubbleText(cleanBubbleText(text));
     el.bubble.classList.remove("typing", "hidden");
     fitBubbleText();
+    // 自动消失：按字长自适应展示时长（用户自己发的"你：…"也用同一策略，稍短）
+    if (bc.autoHide !== false) {
+      scheduleBubbleHide(text, kind);
+    }
+  }
+
+  // 气泡淡出并隐藏（供自动定时 / 手动触发共用）
+  function fadeAndHideBubble() {
+    if (!el.bubble || el.bubble.classList.contains("hidden")) return;
+    var bc = PET_CFG.bubble || {};
+    var fade = (bc.fadeMs != null ? bc.fadeMs : 400);
+    el.bubble.classList.add("fading");
+    // 等淡出过渡结束后再真正隐藏（CSS transition 时长 = fade）
+    clearTimeout(_bubbleFadeTo);
+    _bubbleFadeTo = setTimeout(function () {
+      el.bubble.classList.add("hidden");
+      el.bubble.classList.remove("fading");
+    }, fade);
+  }
+
+  function _hideBubbleNow() {
+    if (!el.bubble) return;
+    clearTimeout(_bubbleHideTo);
+    clearTimeout(_bubbleFadeTo);
+    el.bubble.classList.add("hidden");
+    el.bubble.classList.remove("fading");
+  }
+
+  // 定时器句柄（模块级，避免重复声明）
+  var _bubbleHideTo = 0, _bubbleFadeTo = 0, _bubbleHoverCancelTo = 0;
+
+  // 按文本长度安排自动隐藏（新消息会 cancel 后重排）
+  function scheduleBubbleHide(text, kind) {
+    var bc = PET_CFG.bubble || {};
+    var perChar = (bc.perCharMs != null ? bc.perCharMs : 120);
+    var minMs = (bc.minMs != null ? bc.minMs : 3000);
+    var maxMs = (bc.maxMs != null ? bc.maxMs : 15000);
+    // 用户自己发的消息（"你：…"）短一点，一般 2-3 秒即可
+    var len = (text || "").length;
+    var base = kind === "user" ? (len * 80) : (len * perChar);
+    var ms = Math.max(minMs, Math.min(maxMs, base));
+    clearTimeout(_bubbleHideTo);
+    _bubbleHideTo = setTimeout(fadeAndHideBubble, ms);
+  }
+
+  // 取消自动隐藏（点击宠物时用，让用户慢慢读；或交给悬停逻辑）
+  function cancelBubbleHide() {
+    clearTimeout(_bubbleHideTo);
+    clearTimeout(_bubbleFadeTo);
+    el.bubble.classList.remove("fading");
+    clearTimeout(_bubbleHoverCancelTo);
+  }
+
+  // 鼠标悬停在气泡上 -> 暂缓消失；移开 -> 恢复隐藏计时
+  function bindBubbleHover() {
+    if (!el.bubble || !PET_CFG.bubble || PET_CFG.bubble.cancelOnHover === false) return;
+    el.bubble.addEventListener("mouseenter", function () {
+      // 悬停时取消既定的隐藏（读一半不消失）
+      clearTimeout(_bubbleHideTo);
+      clearTimeout(_bubbleFadeTo);
+      el.bubble.classList.remove("fading");
+    });
+    el.bubble.addEventListener("mouseleave", function () {
+      // 移开气泡后重新排一个隐藏（若当前在展示中）
+      var txt = el.bubbleText ? el.bubbleText.textContent : "";
+      var bc = PET_CFG.bubble || {};
+      if (!bc.autoHide) return;
+      if (el.bubble.classList.contains("hidden")) return;
+      var delay = (bc.hoverDelayMs != null ? bc.hoverDelayMs : 1500);
+      clearTimeout(_bubbleHoverCancelTo);
+      _bubbleHoverCancelTo = setTimeout(function () {
+        // 只在气泡仍展示、且无 pending（非打字中）时排隐藏，避免与 typing 冲突
+        if (el.bubble.classList.contains("hidden") || el.bubble.classList.contains("typing")) return;
+        scheduleBubbleHide(txt, "role");
+      }, delay);
+    });
   }
 
   function showStatus(t) { if (el.status) { el.status.textContent = t || ""; el.status.classList.remove("hidden"); } }
@@ -1502,6 +1600,14 @@
     }, 20);
     bus.emit("tap", { reaction: pick });
     bus.emit("activity");   // 点击也算交互，重置待机倒计时
+    // —— 点击宠物身体：若开启 cancelOnTap 且气泡在展示，取消自动隐藏（用户想慢慢读）——
+    try {
+      var _bc = PET_CFG.bubble || {};
+      if (_bc.cancelOnTap !== false && el.bubble && !el.bubble.classList.contains("hidden")
+          && !el.bubble.classList.contains("typing")) {
+        cancelBubbleHide();
+      }
+    } catch (e) {}
   }
 
   // ============================================================
@@ -1769,6 +1875,8 @@
       el.input.focus();
     });
     el.bubbleText.addEventListener("click", function (e) { e.stopPropagation(); });
+    // 气泡悬停暂缓消失（cancelOnHover 开启时生效）
+    bindBubbleHover();
     el.retry.addEventListener("click", function () { hideError(); loadModel(state.currentModel); });
 
     // 点击宠物身体 → 交互反馈（委托到 document，canvas 是 L2Dwidget 动态创建的）
