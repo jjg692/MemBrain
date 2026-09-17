@@ -20,11 +20,27 @@ pytestmark = pytest.mark.usefixtures("fake_embedding")
 
 
 def _ollama_ready() -> bool:
+    """Ollama 服务在线 **且** 所需主/工具模型已安装，才跑语义测试。
+
+    除服务可达外，还校验 LLM_MODEL / TOOL_LLM_MODEL 已 pull——否则本地服务在线但
+    缺模型时，测试会在模型调用处失败而非优雅跳过（对"服务在、模型缺"的环境更健壮）。
+    """
     try:
-        from core.config import OLLAMA_HOST
+        from core.config import OLLAMA_HOST, LLM_MODEL, TOOL_LLM_MODEL
         import requests
         r = requests.get(OLLAMA_HOST.rstrip("/") + "/api/tags", timeout=3)
-        return r.status_code == 200
+        if r.status_code != 200:
+            return False
+        models = {(m.get("name") or "").split(":")[0] for m in r.json().get("models", [])}
+        # 模型名可能带 tag（如 qwen2.5:7b）；用不含 tag 的 base 名匹配，也兼容精确名
+        def present(name: str) -> bool:
+            if not name:
+                return True
+            if name in models:
+                return True
+            base = name.split(":")[0]
+            return any(m == base or m.split(":")[0] == base for m in models)
+        return present(LLM_MODEL) and present(TOOL_LLM_MODEL)
     except Exception:
         return False
 
